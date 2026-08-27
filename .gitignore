@@ -1,0 +1,27 @@
+.build/
+GTD Planner.app/
+.DS_Store
+.swiftpm/
+DerivedData/
+*.xcuserstate
+
+# Local application data and backup files
+database.json
+*.store
+*.store-shm
+*.store-wal
+*.sqlite
+*.sqlite-*
+*.db
+
+# Local credentials and signing material
+.env
+.env.*
+*.p12
+*.cer
+
+# Internal design and diagnostic material
+Apple报告错误信息/
+UI截图/
+UI现状与功能说明.md
+MCP功能设计方案.md
