@@ -1,5 +1,7 @@
 # GTD Planner
 
+[English](README.en.md) · 中文
+
 GTD Planner 是一个面向 macOS 的原生 GTD 任务管理工具，将任务收集、项目拆解、计划安排、实际专注和复盘放在同一个工作流中。
 
 项目目前正在准备首次公开，版本仍处于早期阶段。
@@ -87,6 +89,7 @@ Package.swift          Swift Package 配置
 Info.plist             macOS 应用配置
 build-app.sh           本地构建脚本
 design-qa.md           公开的质量验证记录
+README.en.md           English documentation
 ```
 
 ## 图标与字体
