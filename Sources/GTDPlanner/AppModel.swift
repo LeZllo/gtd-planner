@@ -138,7 +138,7 @@ final class AppModel {
         normalized.ensureProjectOrders()
         normalized.ensureProjectSections()
         normalized.ensureTagDefinitions()
-        normalized.schemaVersion = max(normalized.schemaVersion, 10)
+        normalized.schemaVersion = max(normalized.schemaVersion, 11)
         self.database = normalized
         self.selection = PlannerSelectionState(selectedWorkspaceID: normalized.pinnedWorkspaceIDs[0])
         self.selection.focusMode = normalized.activeTimer?.mode
@@ -154,7 +154,7 @@ final class AppModel {
         normalized.ensureProjectOrders()
         normalized.ensureProjectSections()
         normalized.ensureTagDefinitions()
-        normalized.schemaVersion = max(normalized.schemaVersion, 10)
+        normalized.schemaVersion = max(normalized.schemaVersion, 11)
         self.database = normalized
         self.selection = PlannerSelectionState(selectedWorkspaceID: normalized.pinnedWorkspaceIDs[0])
         self.selection.focusMode = normalized.activeTimer?.mode
@@ -407,10 +407,9 @@ final class AppModel {
         case .inbox:
             return task.status == .inbox
         case .today:
-            guard !task.status.isFinished else { return false }
-            if let start = task.plannedStart, calendar.isDateInToday(start) { return true }
-            if let deadline = task.deadline, calendar.isDateInToday(deadline) { return true }
-            return task.deadline.map { $0 < now } ?? false
+            guard !task.status.isFinished,
+                  !TodayExecutionProjection.isCompleted(task, on: now, calendar: calendar) else { return false }
+            return TodayExecutionProjection.isRelevant(task, on: now, now: now, calendar: calendar)
         case .tomorrow:
             guard !task.status.isFinished else { return false }
             if let start = task.plannedStart, calendar.isDateInTomorrow(start) { return true }

@@ -102,7 +102,7 @@ struct ObsidianImporter {
             let taskPath = normalizedLink(parsed.frontmatter["task"] ?? "")
             let taskID = taskPath.flatMap { pathToTaskID[$0] }
             guard let startedAt = parseDate(parsed.frontmatter["startedAt"]), let endedAt = parseDate(parsed.frontmatter["endedAt"]) else { continue }
-            let source = TimerMode(rawValue: parsed.frontmatter["source"] ?? "stopwatch") ?? .stopwatch
+            let source = TimeEntrySource(rawValue: parsed.frontmatter["source"] ?? "stopwatch") ?? .stopwatch
             result.timeEntries.append(TimeEntry(workspaceID: workspaceID, taskID: taskID,
                                                 title: parsed.frontmatter["title"] ?? fileURL.deletingPathExtension().lastPathComponent,
                                                 startedAt: startedAt, endedAt: endedAt, source: source,

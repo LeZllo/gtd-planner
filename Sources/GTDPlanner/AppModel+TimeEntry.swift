@@ -10,10 +10,15 @@ extension AppModel {
         taskID: UUID?,
         startedAt: Date,
         endedAt: Date,
-        source: TimerMode = .stopwatch,
+        source: TimeEntrySource = .manual,
         note: String = ""
     ) -> TimeEntry? {
-        guard endedAt > startedAt else { return nil }
+        guard endedAt > startedAt,
+              !hasTimeEntryConflict(
+                  workspaceID: workspaceID,
+                  startedAt: startedAt,
+                  endedAt: endedAt
+              ) else { return nil }
 
         let title = taskID.flatMap(task(withID:))?.title ?? "无任务专注"
         let entry = TimeEntry(
@@ -43,6 +48,12 @@ extension AppModel {
     @discardableResult
     func updateTimeEntry(_ value: TimeEntry) -> Bool {
         guard value.endedAt > value.startedAt,
+              !hasTimeEntryConflict(
+                  workspaceID: value.workspaceID,
+                  startedAt: value.startedAt,
+                  endedAt: value.endedAt,
+                  excluding: value.id
+              ),
               let index = database.timeEntries.firstIndex(where: { $0.id == value.id }) else {
             return false
         }
@@ -80,5 +91,33 @@ extension AppModel {
         return database.tasks
             .filter { $0.workspaceID == workspaceID }
             .sorted(by: TaskDisplayOrdering.flatList)
+    }
+
+    /// Actual records must not occupy the same wall-clock interval. An active
+    /// timer is also included so a backfill cannot overlap a session that will
+    /// become a `TimeEntry` when the user stops it.
+    func hasTimeEntryConflict(
+        workspaceID: UUID,
+        startedAt: Date,
+        endedAt: Date,
+        excluding entryID: UUID? = nil,
+        now: Date = .now
+    ) -> Bool {
+        guard endedAt > startedAt else { return true }
+
+        let overlapsStoredEntry = database.timeEntries.contains { entry in
+            entry.workspaceID == workspaceID
+                && entry.id != entryID
+                && entry.endedAt > startedAt
+                && entry.startedAt < endedAt
+        }
+        if overlapsStoredEntry { return true }
+
+        guard let timer = database.activeTimer,
+              (timer.workspaceID ?? selection.selectedWorkspaceID) == workspaceID else {
+            return false
+        }
+        let activeEnd = max(timer.sessionStartedAt, timer.pausedAt ?? now)
+        return activeEnd > startedAt && timer.sessionStartedAt < endedAt
     }
 }

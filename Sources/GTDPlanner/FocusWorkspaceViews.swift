@@ -1336,6 +1336,40 @@ private enum FocusTimelineColors {
     static let backfill = Color(red: 0.96, green: 0.31, blue: 0.28)
 }
 
+private enum FocusLinearTimelineCoordinateSpace {
+    static let name = "focus-linear-timeline"
+}
+
+/// Places a tiny presentation source at a real layout position. Visual
+/// transforms such as `offset` and `position` can leave a popover reading the
+/// source's pre-transform bounds, which is precisely what these timelines must
+/// avoid.
+struct TimelinePopoverPointLayout: Layout {
+    let point: CGPoint
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let anchor = subviews.first else { return }
+        anchor.place(
+            at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+            anchor: .center,
+            proposal: ProposedViewSize(width: 2, height: 2)
+        )
+    }
+}
+
 /// The horizontal geometry is kept as a value type so drag math can be
 /// tested without launching the view. One visible hour always maps to the
 /// same pixel width for both lanes.
@@ -1376,6 +1410,24 @@ struct FocusLinearTimelineGeometry {
         return visibleStart.addingTimeInterval(snapped)
     }
 
+    /// Converts a point reported in the whole timeline coordinate space to
+    /// the time-grid coordinate. The label rail is removed exactly once.
+    func contentX(atTimelineX timelineX: CGFloat, axisWidth: CGFloat) -> CGFloat {
+        min(contentWidth, max(0, timelineX - axisWidth))
+    }
+
+    func date(atTimelineX timelineX: CGFloat, axisWidth: CGFloat) -> Date {
+        date(atX: contentX(atTimelineX: timelineX, axisWidth: axisWidth))
+    }
+
+    func timelineX(for date: Date, axisWidth: CGFloat) -> CGFloat {
+        axisWidth + x(for: date)
+    }
+
+    func clampedTimelineX(_ timelineX: CGFloat, axisWidth: CGFloat) -> CGFloat {
+        axisWidth + contentX(atTimelineX: timelineX, axisWidth: axisWidth)
+    }
+
     func width(from start: Date, to end: Date) -> CGFloat {
         max(0, x(for: end) - x(for: start))
     }
@@ -1393,14 +1445,19 @@ struct FocusLinearTimelineGeometry {
     }
 }
 
-private struct FocusBackfillRange: Identifiable {
-    let id = UUID()
+private struct FocusBackfillRange {
     let start: Date
     let end: Date
 
     var duration: TimeInterval {
         end.timeIntervalSince(start)
     }
+}
+
+private struct FocusBackfillPresentation: Identifiable {
+    let id = UUID()
+    let range: FocusBackfillRange
+    let anchor: CGPoint
 }
 
 private struct FocusLinearTimeline: View {
@@ -1414,7 +1471,7 @@ private struct FocusLinearTimeline: View {
 
     @State private var dragStart: Date?
     @State private var dragEnd: Date?
-    @State private var backfillSelection: FocusBackfillRange?
+    @State private var backfillSelection: FocusBackfillPresentation?
 
     // The label rail is deliberately wide enough to keep both lane names
     // readable. The time grid then fills all remaining width edge-to-edge.
@@ -1531,13 +1588,16 @@ private struct FocusLinearTimeline: View {
             if let dragRange = currentDragRange {
                 backfillOverlay(range: dragRange, geometry: geometry)
             }
+
+            backfillPopoverAnchor(geometry: geometry)
         }
+        .coordinateSpace(.named(FocusLinearTimelineCoordinateSpace.name))
         .frame(width: proxy.size.width, height: axisHeight + laneHeight * 2)
     }
 
     private var currentDragRange: FocusBackfillRange? {
         guard let start = dragStart, let end = dragEnd, end > start else {
-            return backfillSelection
+            return backfillSelection?.range
         }
         return FocusBackfillRange(start: start, end: end)
     }
@@ -1690,46 +1750,84 @@ private struct FocusLinearTimeline: View {
         .frame(width: width, height: laneHeight - 24)
         .offset(x: x, y: axisHeight + laneHeight + 12)
         .zIndex(20)
-        .popover(item: $backfillSelection, attachmentAnchor: .rect(.bounds), arrowEdge: .top) { selection in
-            FocusBackfillPopover(
-                range: selection,
-                workspaceID: workspaceID,
-                onCancel: { backfillSelection = nil },
-                onSave: { taskID, note in
-                    _ = model.addTimeEntry(
-                        workspaceID: workspaceID,
-                        taskID: taskID,
-                        startedAt: selection.start,
-                        endedAt: selection.end,
-                        source: .stopwatch,
-                        note: note
-                    )
-                    backfillSelection = nil
-                }
-            )
-            .environment(model)
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("补录时间，\(focusTimeRange(start: range.start, end: range.end))")
     }
 
+    private func backfillPopoverAnchor(
+        geometry: FocusLinearTimelineGeometry
+    ) -> some View {
+        let fallback = CGPoint(
+            x: axisWidth + geometry.contentWidth / 2,
+            y: axisHeight + laneHeight * 1.5
+        )
+        let anchor = backfillSelection?.anchor ?? fallback
+
+        return TimelinePopoverPointLayout(point: anchor) {
+            Circle()
+                .fill(FocusTimelineColors.backfill.opacity(0.001))
+                .frame(width: 2, height: 2)
+                .popover(
+                    item: $backfillSelection,
+                    attachmentAnchor: .rect(.bounds),
+                    arrowEdge: .top
+                ) { presentation in
+                    FocusBackfillPopover(
+                        range: presentation.range,
+                        workspaceID: workspaceID,
+                        onCancel: { backfillSelection = nil },
+                        onSave: { taskID, note in
+                            _ = model.addTimeEntry(
+                                workspaceID: workspaceID,
+                                taskID: taskID,
+                                startedAt: presentation.range.start,
+                                endedAt: presentation.range.end,
+                                source: .manual,
+                                note: note
+                            )
+                            backfillSelection = nil
+                        }
+                    )
+                    .environment(model)
+                }
+        }
+            .frame(
+                width: axisWidth + geometry.contentWidth,
+                height: axisHeight + laneHeight * 2
+            )
+            .accessibilityHidden(true)
+            .zIndex(40)
+    }
+
     private func backfillGesture(geometry: FocusLinearTimelineGeometry) -> some Gesture {
-        DragGesture(minimumDistance: 2)
+        DragGesture(
+            minimumDistance: 2,
+            coordinateSpace: .named(FocusLinearTimelineCoordinateSpace.name)
+        )
             .onChanged { value in
-                let start = geometry.date(atX: value.startLocation.x)
-                let current = geometry.date(atX: value.location.x)
+                let start = geometry.date(atTimelineX: value.startLocation.x, axisWidth: axisWidth)
+                let current = geometry.date(atTimelineX: value.location.x, axisWidth: axisWidth)
                 let rangeStart = min(start, current)
                 let rangeEnd = max(start, current)
                 dragStart = rangeStart
                 dragEnd = rangeEnd > rangeStart ? rangeEnd : rangeStart.addingTimeInterval(60)
             }
-            .onEnded { _ in
+            .onEnded { value in
                 defer {
                     dragStart = nil
                     dragEnd = nil
                 }
                 guard let start = dragStart, let end = dragEnd, end > start else { return }
-                backfillSelection = FocusBackfillRange(start: start, end: end)
+                let minimumY = axisHeight + laneHeight + 1
+                let maximumY = axisHeight + laneHeight * 2 - 1
+                let anchor = CGPoint(
+                    x: geometry.clampedTimelineX(value.location.x, axisWidth: axisWidth),
+                    y: min(maximumY, max(minimumY, value.location.y))
+                )
+                backfillSelection = FocusBackfillPresentation(
+                    range: FocusBackfillRange(start: start, end: end),
+                    anchor: anchor
+                )
             }
     }
 
@@ -1920,7 +2018,7 @@ private struct FocusLinearActualBlock: View {
             let width = max(8, geometry.width(from: clipped.start, to: clipped.end))
             ZStack {
                 HStack(spacing: 7) {
-                    Image(systemName: entry.source == .pomodoro ? "timer" : "stopwatch")
+                    Image(systemName: entry.source.icon)
                         .font(.system(size: 10, weight: .semibold))
 
                     VStack(alignment: .leading, spacing: 1) {
@@ -2204,7 +2302,7 @@ private struct FocusEntryEditorSheet: View {
     @State private var entryDate: Date
     @State private var startTime: Date
     @State private var endTime: Date
-    @State private var source: TimerMode
+    @State private var source: TimeEntrySource
     @State private var note: String
     @State private var validationMessage: String?
 
@@ -2223,7 +2321,7 @@ private struct FocusEntryEditorSheet: View {
         _entryDate = State(initialValue: baseDate)
         _startTime = State(initialValue: entry?.startedAt ?? fallbackStart)
         _endTime = State(initialValue: entry?.endedAt ?? fallbackEnd)
-        _source = State(initialValue: entry?.source ?? .stopwatch)
+        _source = State(initialValue: entry?.source ?? .manual)
         _note = State(initialValue: entry?.note ?? "")
     }
 
@@ -2286,8 +2384,9 @@ private struct FocusEntryEditorSheet: View {
 
                     editorField("来源") {
                         Picker("来源", selection: $source) {
-                            Text("正计时").tag(TimerMode.stopwatch)
-                            Text("番茄钟").tag(TimerMode.pomodoro)
+                            Text("手动补录").tag(TimeEntrySource.manual)
+                            Text("正计时").tag(TimeEntrySource.stopwatch)
+                            Text("番茄钟").tag(TimeEntrySource.pomodoro)
                         }
                         .labelsHidden()
                     }

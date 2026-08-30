@@ -100,9 +100,82 @@ enum DeadlinePrecision: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+/// Describes why a task owns a multi-day planned range. The range itself stays
+/// in `plannedStart` / `plannedEnd`; this value prevents UI-05 from guessing
+/// intent from the number of calendar days.
+enum TaskPlanRangeIntent: String, Codable, CaseIterable, Identifiable, Sendable {
+    case progress
+    case completeWithin = "complete-within"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .progress: "跨日推进"
+        case .completeWithin: "区间内完成"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .progress: "在计划区间内持续推进，任务最终只完成一次"
+        case .completeWithin: "在计划区间内任选一天完成一次"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .progress: "arrow.forward"
+        case .completeWithin: "calendar.badge.checkmark"
+        }
+    }
+}
+
+/// A concrete execution slot is a daily time-box, not a replacement for the
+/// task's planned range and not an actual focus record.
+struct TaskExecutionSlot: Identifiable, Codable, Hashable, Sendable {
+    var id: UUID = UUID()
+    var start: Date
+    var end: Date
+}
+
 enum TimerMode: String, Codable, Sendable {
     case stopwatch
     case pomodoro
+}
+
+/// Describes how a completed actual-focus record was created. This is kept
+/// separate from `TimerMode`: a manual backfill is an actual record source,
+/// never a running timer mode.
+enum TimeEntrySource: String, Codable, CaseIterable, Hashable, Sendable {
+    case stopwatch
+    case pomodoro
+    case manual
+
+    init(timerMode: TimerMode) {
+        switch timerMode {
+        case .stopwatch:
+            self = .stopwatch
+        case .pomodoro:
+            self = .pomodoro
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .stopwatch: "正计时"
+        case .pomodoro: "番茄钟"
+        case .manual: "手动补录"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .stopwatch: "stopwatch"
+        case .pomodoro: "timer"
+        case .manual: "clock.arrow.circlepath"
+        }
+    }
 }
 
 enum PomodoroPhase: String, Codable, Sendable {
@@ -441,6 +514,12 @@ struct GTDTask: Identifiable, Codable, Hashable, Sendable {
     /// precise plan are different user choices. A missing end represents a
     /// planned point; `.none` is used only when the task has no planned start.
     var plannedPrecision: DeadlinePrecision = .none
+    /// Used only when a planned range crosses calendar days. Single-day plans
+    /// retain this value without changing their behavior.
+    var planRangeIntent: TaskPlanRangeIntent = .progress
+    /// Specific daily time-boxes. These are planned time; timer-generated
+    /// `TimeEntry` values remain the source of truth for actual focus.
+    var executionSlots: [TaskExecutionSlot] = []
     var deadline: Date?
     var deadlinePrecision: DeadlinePrecision = .none
     var recurrence: String = ""
@@ -457,7 +536,7 @@ extension GTDTask {
     private enum CodingKeys: String, CodingKey {
         case id, title, workspaceID, projectID, sectionID, parentID
         case status, priority, actionList, tags, contexts
-        case plannedStart, plannedEnd, plannedPrecision
+        case plannedStart, plannedEnd, plannedPrecision, planRangeIntent, executionSlots
         case deadline, deadlinePrecision, recurrence, note
         case createdAt, updatedAt, completedAt, order
         case completedInstances, skippedInstances
@@ -497,6 +576,8 @@ extension GTDTask {
         } else {
             decodedPlannedPrecision
         }
+        planRangeIntent = try container.decodeIfPresent(TaskPlanRangeIntent.self, forKey: .planRangeIntent) ?? .progress
+        executionSlots = try container.decodeIfPresent([TaskExecutionSlot].self, forKey: .executionSlots) ?? []
         deadline = try container.decodeIfPresent(Date.self, forKey: .deadline)
         deadlinePrecision = try container.decodeIfPresent(DeadlinePrecision.self, forKey: .deadlinePrecision) ?? .none
         recurrence = try container.decodeIfPresent(String.self, forKey: .recurrence) ?? ""
@@ -517,7 +598,7 @@ struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
     var title: String
     var startedAt: Date
     var endedAt: Date
-    var source: TimerMode
+    var source: TimeEntrySource
     var pomodoroPhase: PomodoroPhase?
     var note: String = ""
     /// Actual running time, excluding pauses. Older records do not have this
@@ -705,7 +786,7 @@ struct TaskSelection: Equatable, Sendable {
 }
 
 struct GTDDatabase: Codable, Sendable {
-    var schemaVersion: Int = 10
+    var schemaVersion: Int = 11
     var workspaces: [Workspace] = []
     /// The explicit workspace order is separate from the workspace records so
     /// older databases can keep decoding without adding presentation fields to
@@ -730,7 +811,7 @@ struct GTDDatabase: Codable, Sendable {
     var trashItems: [TrashItem] = []
     var activityLog: [ActivityLogEntry] = []
 
-    init(schemaVersion: Int = 10,
+    init(schemaVersion: Int = 11,
          workspaces: [Workspace] = [],
          workspaceOrder: [UUID] = [],
          pinnedWorkspaceIDs: [UUID] = [],
@@ -975,7 +1056,7 @@ struct GTDDatabase: Codable, Sendable {
         }
 
         normalizeTagDefinitionOrders()
-        schemaVersion = max(schemaVersion, 10)
+        schemaVersion = max(schemaVersion, 11)
     }
 
     mutating func ensureWorkspaceMetadata() {

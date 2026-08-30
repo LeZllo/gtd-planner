@@ -525,7 +525,7 @@ struct TimelineView: View {
                             Rectangle().fill(entry.source == .pomodoro ? AppColors.coral : AppColors.teal).frame(width: 2)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.title).font(.system(size: 13, weight: .medium))
-                                Text(entry.source == .pomodoro ? "番茄钟" : "正计时").font(.system(size: 10)).foregroundStyle(AppColors.muted)
+                                Text(entry.source.title).font(.system(size: 10)).foregroundStyle(AppColors.muted)
                             }
                             Spacer()
                         }
@@ -1135,7 +1135,7 @@ struct ActualRecords: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack { Text("实际记录").font(.system(size: 12, weight: .semibold)); Spacer(); Text(totalDuration(entries)).font(.system(size: 11)).foregroundStyle(AppColors.muted) }
             if entries.isEmpty { Text("还没有时间记录").font(.system(size: 11)).foregroundStyle(AppColors.muted) }
-            ForEach(entries.prefix(3)) { entry in HStack { Image(systemName: entry.source == .pomodoro ? "timer" : "stopwatch").foregroundStyle(entry.source == .pomodoro ? AppColors.coral : AppColors.teal); Text(entry.startedAt.formatted(date: .abbreviated, time: .shortened)); Spacer(); Text(formatDuration(entry.duration)).foregroundStyle(AppColors.muted) }.font(.system(size: 10)) }
+            ForEach(entries.prefix(3)) { entry in HStack { Image(systemName: entry.source.icon).foregroundStyle(entry.source == .pomodoro ? AppColors.coral : AppColors.teal); Text(entry.startedAt.formatted(date: .abbreviated, time: .shortened)); Spacer(); Text(formatDuration(entry.duration)).foregroundStyle(AppColors.muted) }.font(.system(size: 10)) }
         }
     }
     private func totalDuration(_ entries: [TimeEntry]) -> String { formatDuration(entries.reduce(0) { $0 + $1.duration }) }

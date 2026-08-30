@@ -155,7 +155,7 @@ final class LocalDatabase: @unchecked Sendable {
         result.ensureProjectOrders()
         result.ensureProjectSections()
         result.ensureTagDefinitions()
-        result.schemaVersion = max(result.schemaVersion, 10)
+        result.schemaVersion = max(result.schemaVersion, 11)
         return result
     }
 
@@ -238,6 +238,7 @@ final class LocalDatabase: @unchecked Sendable {
         for value in database.tasks {
             let tagsJSON = try encodeJSON(value.tags)
             let contextsJSON = try encodeJSON(value.contexts)
+            let executionSlotsJSON = try encodeJSON(value.executionSlots)
             let completedInstancesJSON = try encodeJSON(value.completedInstances)
             let skippedInstancesJSON = try encodeJSON(value.skippedInstances)
             if let row = taskByID[value.id] {
@@ -254,6 +255,8 @@ final class LocalDatabase: @unchecked Sendable {
                 row.plannedStart = value.plannedStart
                 row.plannedEnd = value.plannedEnd
                 row.plannedPrecisionRaw = value.plannedPrecision.rawValue
+                row.planRangeIntentRaw = value.planRangeIntent.rawValue
+                row.executionSlotsJSON = executionSlotsJSON
                 row.deadline = value.deadline
                 row.deadlinePrecisionRaw = value.deadlinePrecision.rawValue
                 row.recurrence = value.recurrence
@@ -271,6 +274,8 @@ final class LocalDatabase: @unchecked Sendable {
                                       actionListRaw: value.actionList.rawValue,
                                       tagsJSON: tagsJSON, contextsJSON: contextsJSON, plannedStart: value.plannedStart,
                                       plannedEnd: value.plannedEnd, plannedPrecisionRaw: value.plannedPrecision.rawValue,
+                                      planRangeIntentRaw: value.planRangeIntent.rawValue,
+                                      executionSlotsJSON: executionSlotsJSON,
                                       deadline: value.deadline,
                                       deadlinePrecisionRaw: value.deadlinePrecision.rawValue, recurrence: value.recurrence,
                                       note: value.note, createdAt: value.createdAt, updatedAt: value.updatedAt,
@@ -366,7 +371,7 @@ final class LocalDatabase: @unchecked Sendable {
         let logs = try context.fetch(FetchDescriptor<SDActivityLogEntry>())
 
         return GTDDatabase(
-            schemaVersion: settings?.schemaVersion ?? 10,
+            schemaVersion: settings?.schemaVersion ?? 11,
             workspaces: workspaces.map { Workspace(id: $0.id, name: $0.name, symbolName: $0.symbolName, colorHex: $0.colorHex) },
             workspaceOrder: settings.flatMap { decodeJSON([UUID].self, from: $0.workspaceOrderJSON) } ?? [],
             pinnedWorkspaceIDs: settings.flatMap { decodeJSON([UUID].self, from: $0.pinnedWorkspaceIDsJSON) } ?? [],
@@ -406,9 +411,11 @@ final class LocalDatabase: @unchecked Sendable {
               let priority = Priority(rawValue: row.priorityRaw),
               let storedActionList = ActionList(rawValue: row.actionListRaw),
               let plannedPrecision = DeadlinePrecision(rawValue: row.plannedPrecisionRaw),
+              let planRangeIntent = TaskPlanRangeIntent(rawValue: row.planRangeIntentRaw),
               let precision = DeadlinePrecision(rawValue: row.deadlinePrecisionRaw),
               let tags = decodeJSON([String].self, from: row.tagsJSON),
               let contexts = decodeJSON([String].self, from: row.contextsJSON),
+              let executionSlots = decodeJSON([TaskExecutionSlot].self, from: row.executionSlotsJSON),
               let completedInstances = decodeJSON([String].self, from: row.completedInstancesJSON),
               let skippedInstances = decodeJSON([String].self, from: row.skippedInstancesJSON) else { return nil }
         let actionList: ActionList = if migrateLegacyActionList {
@@ -425,13 +432,14 @@ final class LocalDatabase: @unchecked Sendable {
                        actionList: actionList,
                        tags: tags, contexts: contexts, plannedStart: row.plannedStart, plannedEnd: row.plannedEnd,
                        plannedPrecision: row.plannedStart == nil ? .none : (plannedPrecision == .none ? .minute : plannedPrecision),
+                       planRangeIntent: planRangeIntent, executionSlots: executionSlots,
                        deadline: row.deadline, deadlinePrecision: precision, recurrence: row.recurrence, note: row.note,
                        createdAt: row.createdAt, updatedAt: row.updatedAt, completedAt: row.completedAt,
                        order: row.order, completedInstances: completedInstances, skippedInstances: skippedInstances)
     }
 
     private func decodeTimeEntry(_ row: SDTimeEntry) -> TimeEntry? {
-        guard let source = TimerMode(rawValue: row.sourceRaw) else { return nil }
+        guard let source = TimeEntrySource(rawValue: row.sourceRaw) else { return nil }
         return TimeEntry(id: row.id, workspaceID: row.workspaceID, taskID: row.taskID, title: row.title,
                          startedAt: row.startedAt, endedAt: row.endedAt, source: source,
                          pomodoroPhase: row.pomodoroPhaseRaw.flatMap(PomodoroPhase.init(rawValue:)), note: row.note,

@@ -29,7 +29,7 @@ extension AppModel {
             normalized.ensureProjectOrders()
             normalized.ensureProjectSections()
             normalized.ensureTagDefinitions()
-            normalized.schemaVersion = max(normalized.schemaVersion, 10)
+            normalized.schemaVersion = max(normalized.schemaVersion, 11)
             database = normalized
             selection.selectedWorkspaceID = database.pinnedWorkspaceIDs[0]
             selection.selectedProjectID = nil
@@ -48,7 +48,7 @@ extension AppModel {
             imported.ensureProjectSections()
             imported.ensureWorkspaceMetadata()
             imported.ensureTagDefinitions()
-            imported.schemaVersion = max(imported.schemaVersion, 10)
+            imported.schemaVersion = max(imported.schemaVersion, 11)
             database = imported
             selection.selectedWorkspaceID = database.pinnedWorkspaceIDs[0]
             selection.selectedProjectID = nil

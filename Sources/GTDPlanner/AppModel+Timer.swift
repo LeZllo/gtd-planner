@@ -115,7 +115,7 @@ extension AppModel {
             title: timer.title,
             startedAt: sessionStart,
             endedAt: sessionEnd,
-            source: timer.mode,
+            source: TimeEntrySource(timerMode: timer.mode),
             pomodoroPhase: timer.phase,
             activeSeconds: clampedElapsed
         )

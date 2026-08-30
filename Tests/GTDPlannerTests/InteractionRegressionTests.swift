@@ -161,6 +161,100 @@ struct InteractionRegressionTests {
         #expect(try #require(model.activeTimer?.targetSeconds) == 180 * 60)
     }
 
+    @Test("Pomodoro clock switches from remaining time to explicit overtime")
+    func pomodoroClockShowsOvertime() {
+        let remaining = PomodoroClockState.make(targetSeconds: 25 * 60, elapsed: 24 * 60 + 50)
+        #expect(remaining.phase == .remaining)
+        #expect(remaining.text == "剩余 00:10")
+
+        let targetReached = PomodoroClockState.make(targetSeconds: 25 * 60, elapsed: 25 * 60)
+        #expect(targetReached.phase == .overtime)
+        #expect(targetReached.text == "超时 +00:00")
+
+        let overtime = PomodoroClockState.make(targetSeconds: 25 * 60, elapsed: 27 * 60 + 5)
+        #expect(overtime.phase == .overtime)
+        #expect(overtime.text == "超时 +02:05")
+    }
+
+    @Test("Today schedule dragging snaps to 15 minutes and Option refines to 5 minutes")
+    func todayScheduleDragUsesApprovedSnapping() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 30))!
+
+        let standard = TodayScheduleDragRules.selection(
+            lane: .plan,
+            day: day,
+            startY: 61,
+            currentY: 97,
+            startHour: 6,
+            endHour: 24,
+            hourHeight: 60,
+            fineSnap: false,
+            calendar: calendar
+        )
+        #expect(calendar.component(.hour, from: standard.start) == 7)
+        #expect(calendar.component(.minute, from: standard.start) == 0)
+        #expect(calendar.component(.hour, from: standard.end) == 7)
+        #expect(calendar.component(.minute, from: standard.end) == 30)
+
+        let fine = TodayScheduleDragRules.selection(
+            lane: .actual,
+            day: day,
+            startY: 62,
+            currentY: 68,
+            startHour: 6,
+            endHour: 24,
+            hourHeight: 60,
+            fineSnap: true,
+            calendar: calendar
+        )
+        #expect(calendar.component(.hour, from: fine.start) == 7)
+        #expect(calendar.component(.minute, from: fine.start) == 0)
+        #expect(calendar.component(.hour, from: fine.end) == 7)
+        #expect(calendar.component(.minute, from: fine.end) == 10)
+    }
+
+    @Test("Actual-track dragging defaults past ranges to backfill and current ranges to Pomodoro")
+    func todayActualDragChoosesSafeDefaultAction() {
+        let now = Date(timeIntervalSinceReferenceDate: 1_050_000)
+        let past = DateInterval(
+            start: now.addingTimeInterval(-3_600),
+            end: now.addingTimeInterval(-1)
+        )
+        let current = DateInterval(
+            start: now.addingTimeInterval(-60),
+            end: now.addingTimeInterval(24 * 60)
+        )
+
+        #expect(TodayActualDraftAction.defaultAction(for: past, now: now) == .manual)
+        #expect(TodayActualDraftAction.defaultAction(for: current, now: now) == .pomodoro)
+    }
+
+    @Test("Manual backfill cannot overlap an active timer")
+    func backfillRespectsActiveTimerInterval() throws {
+        let fixture = makeFixture()
+        let model = AppModel(database: fixture.database, storage: LocalDatabase(inMemory: true))
+        let now = Date(timeIntervalSinceReferenceDate: 1_060_000)
+        let timerStart = now.addingTimeInterval(-600)
+        model.startStopwatch(for: nil, at: timerStart)
+
+        #expect(model.addTimeEntry(
+            workspaceID: fixture.database.workspaces[0].id,
+            taskID: fixture.firstTaskID,
+            startedAt: timerStart.addingTimeInterval(60),
+            endedAt: now.addingTimeInterval(-60)
+        ) == nil)
+
+        let earlier = try #require(model.addTimeEntry(
+            workspaceID: fixture.database.workspaces[0].id,
+            taskID: fixture.firstTaskID,
+            startedAt: timerStart.addingTimeInterval(-600),
+            endedAt: timerStart
+        ))
+        #expect(earlier.source == .manual)
+    }
+
     @Test("Focus timeline includes only minute-precise plans")
     func focusTimelineRequiresMinutePrecision() throws {
         let fixture = makeFixture()
@@ -198,6 +292,137 @@ struct InteractionRegressionTests {
         #expect(abs(geometry.x(for: fourteen) - 300) < 0.001)
         #expect(geometry.date(atX: 330) == calendar.date(bySettingHour: 14, minute: 30, second: 0, of: day)!)
         #expect(geometry.minuteDelta(for: 60) == 60 * 60)
+    }
+
+    @Test("Focus timeline removes its label rail exactly once for pointer mapping")
+    func focusTimelinePointerMappingUsesOneCoordinateSpace() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.date(from: DateComponents(year: 2026, month: 8, day: 30))!
+        let geometry = FocusLinearTimelineGeometry(day: day, contentWidth: 600, calendar: calendar)
+        let axisWidth: CGFloat = 150
+        let fourteenThirty = calendar.date(bySettingHour: 14, minute: 30, second: 0, of: day)!
+
+        let timelineX = geometry.timelineX(for: fourteenThirty, axisWidth: axisWidth)
+        #expect(abs(timelineX - 480) < 0.001)
+        #expect(abs(geometry.contentX(atTimelineX: timelineX, axisWidth: axisWidth) - 330) < 0.001)
+        #expect(geometry.date(atTimelineX: timelineX, axisWidth: axisWidth) == fourteenThirty)
+        #expect(geometry.clampedTimelineX(90, axisWidth: axisWidth) == axisWidth)
+        #expect(geometry.clampedTimelineX(900, axisWidth: axisWidth) == axisWidth + 600)
+    }
+
+    @Test("Today schedule popover anchor follows release point inside its lane")
+    func todaySchedulePopoverAnchorStaysWithReleasePoint() {
+        let plan = TodayScheduleDragRules.popoverAnchor(
+            for: .plan,
+            location: CGPoint(x: 126, y: 412),
+            laneWidth: 240,
+            totalHeight: 1_152
+        )
+        #expect(plan == CGPoint(x: 120, y: 412))
+
+        let actual = TodayScheduleDragRules.popoverAnchor(
+            for: .actual,
+            location: CGPoint(x: 318, y: 726),
+            laneWidth: 240,
+            totalHeight: 1_152
+        )
+        #expect(actual == CGPoint(x: 360, y: 726))
+
+        let clamped = TodayScheduleDragRules.popoverAnchor(
+            for: .actual,
+            location: CGPoint(x: 30, y: 1_300),
+            laneWidth: 240,
+            totalHeight: 1_152
+        )
+        #expect(clamped == CGPoint(x: 360, y: 1_152))
+    }
+
+    @Test("Today execution separates multi-day intent, daily slots, deadlines, and actual focus")
+    func todayExecutionProjectionPreservesTimeSemantics() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        func date(_ day: Int, _ hour: Int = 0, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 8, day: day, hour: hour, minute: minute))!
+        }
+
+        let workspace = Workspace(name: "Today", symbolName: "calendar", colorHex: "#0A84FF")
+        let range = try #require(TaskDateNormalizer.normalizedPlan(
+            start: date(26),
+            end: date(29),
+            precision: .date,
+            calendar: calendar
+        ))
+
+        var progress = GTDTask(title: "Progress", workspaceID: workspace.id, parentID: nil, status: .open)
+        progress.plannedStart = range.start
+        progress.plannedEnd = range.end
+        progress.plannedPrecision = .date
+        progress.planRangeIntent = .progress
+        progress.executionSlots = [TaskExecutionSlot(start: date(28, 10), end: date(28, 11))]
+
+        var completeWithin = GTDTask(title: "Complete within", workspaceID: workspace.id, parentID: nil, status: .open)
+        completeWithin.plannedStart = range.start
+        completeWithin.plannedEnd = range.end
+        completeWithin.plannedPrecision = .date
+        completeWithin.planRangeIntent = .completeWithin
+
+        var overdue = GTDTask(title: "Overdue", workspaceID: workspace.id, parentID: nil, status: .open)
+        overdue.deadline = date(27, 18)
+        overdue.deadlinePrecision = .minute
+
+        var scheduled = GTDTask(title: "Scheduled", workspaceID: workspace.id, parentID: nil, status: .open)
+        scheduled.plannedStart = date(28, 14)
+        scheduled.plannedEnd = date(28, 15)
+        scheduled.plannedPrecision = .minute
+
+        var completed = GTDTask(title: "Completed", workspaceID: workspace.id, parentID: nil, status: .done)
+        completed.plannedStart = date(28)
+        completed.plannedPrecision = .date
+        completed.completedAt = date(28, 9)
+
+        var daily = GTDTask(title: "Daily", workspaceID: workspace.id, parentID: nil, status: .open)
+        daily.recurrence = "FREQ=DAILY"
+        daily.completedInstances = [TodayExecutionProjection.completionToken(for: date(28), calendar: calendar)]
+
+        let actual = TimeEntry(
+            workspaceID: workspace.id,
+            taskID: scheduled.id,
+            title: scheduled.title,
+            startedAt: date(28, 9, 40),
+            endedAt: date(28, 10, 10),
+            source: .pomodoro
+        )
+        let database = GTDDatabase(
+            workspaces: [workspace],
+            workspaceOrder: [workspace.id],
+            pinnedWorkspaceIDs: [workspace.id],
+            tasks: [progress, completeWithin, overdue, scheduled, completed, daily],
+            timeEntries: [actual]
+        )
+        let snapshot = TodayExecutionProjection.make(
+            tasks: database.tasks,
+            timeEntries: database.timeEntries,
+            day: date(28),
+            workspaceID: workspace.id,
+            now: date(28, 12),
+            calendar: calendar
+        )
+
+        #expect(Set(snapshot.tasks.map(\.id)) == Set(database.tasks.map(\.id)))
+        #expect(snapshot.crossDayProgressTasks.map(\.id) == [progress.id])
+        #expect(snapshot.completeWithinTasks.map(\.id) == [completeWithin.id])
+        #expect(Set(snapshot.drawerTasks.map(\.id)) == Set([completeWithin.id, overdue.id]))
+        #expect(snapshot.overdueTasks.map(\.id) == [overdue.id])
+        #expect(Set(snapshot.completedTasks.map(\.id)) == Set([completed.id, daily.id]))
+        #expect(snapshot.planBlocks.count == 2)
+        #expect(snapshot.plannedDuration == 2 * 3_600)
+        #expect(snapshot.actualDuration == 30 * 60)
+
+        let model = AppModel(database: database, storage: LocalDatabase(inMemory: true))
+        model.toggleTodayCompletion(taskID: daily.id, on: date(28), calendar: calendar)
+        #expect(model.task(withID: daily.id)?.completedInstances.isEmpty == true)
+        #expect(model.task(withID: daily.id)?.status == .open)
     }
 
     @Test("Completing a parent completes every descendant")
@@ -1204,6 +1429,13 @@ struct InteractionRegressionTests {
         task.plannedStart = Date(timeIntervalSinceReferenceDate: 100_000)
         task.plannedEnd = Date(timeIntervalSinceReferenceDate: 103_600)
         task.plannedPrecision = .minute
+        task.planRangeIntent = .completeWithin
+        task.executionSlots = [
+            TaskExecutionSlot(
+                start: Date(timeIntervalSinceReferenceDate: 120_000),
+                end: Date(timeIntervalSinceReferenceDate: 121_800)
+            )
+        ]
         task.deadline = Date(timeIntervalSinceReferenceDate: 200_000)
         task.deadlinePrecision = .date
         task.recurrence = "FREQ=WEEKLY"
@@ -1219,6 +1451,8 @@ struct InteractionRegressionTests {
         #expect(restored.plannedStart == task.plannedStart)
         #expect(restored.plannedEnd == task.plannedEnd)
         #expect(restored.plannedPrecision == .minute)
+        #expect(restored.planRangeIntent == .completeWithin)
+        #expect(restored.executionSlots == task.executionSlots)
         #expect(restored.deadline == task.deadline)
         #expect(restored.deadlinePrecision == .date)
         #expect(restored.recurrence == "FREQ=WEEKLY")
@@ -1239,7 +1473,15 @@ struct InteractionRegressionTests {
             note: "补录说明"
         ))
         #expect(added.duration == 3_600)
+        #expect(added.source == .manual)
         #expect(model.task(withID: fixture.firstTaskID)?.plannedStart == nil)
+
+        #expect(model.addTimeEntry(
+            workspaceID: fixture.database.workspaces[0].id,
+            taskID: fixture.firstTaskID,
+            startedAt: start.addingTimeInterval(1_800),
+            endedAt: end.addingTimeInterval(1_800)
+        ) == nil)
 
         var edited = added
         edited.startedAt = start.addingTimeInterval(600)
@@ -1249,14 +1491,24 @@ struct InteractionRegressionTests {
         #expect(model.timeEntry(withID: added.id)?.startedAt == start.addingTimeInterval(600))
         #expect(model.timeEntry(withID: added.id)?.duration == 3_600)
 
+        let adjacent = try #require(model.addTimeEntry(
+            workspaceID: fixture.database.workspaces[0].id,
+            taskID: fixture.firstTaskID,
+            startedAt: end.addingTimeInterval(600),
+            endedAt: end.addingTimeInterval(1_200)
+        ))
+        #expect(adjacent.source == .manual)
+
         model.saveTask?.cancel()
         model.saveNow()
         let restored = try #require(model.storage.load().timeEntries.first(where: { $0.id == added.id }))
         #expect(restored.activeSeconds == 3_600)
         #expect(restored.note == "已编辑")
+        #expect(restored.source == .manual)
 
         #expect(model.deleteTimeEntry(withID: added.id))
         #expect(model.timeEntry(withID: added.id) == nil)
+        #expect(model.deleteTimeEntry(withID: adjacent.id))
         #expect(model.activityLog.contains { $0.action == "补录实际专注" })
         #expect(model.activityLog.contains { $0.action == "编辑实际专注" })
         #expect(model.activityLog.contains { $0.action == "删除实际专注" })
@@ -1469,7 +1721,7 @@ struct InteractionRegressionTests {
         let model = AppModel(database: database, storage: LocalDatabase(inMemory: true))
         let task = try #require(model.task(withID: fixture.firstTaskID))
 
-        #expect(model.database.schemaVersion == 10)
+        #expect(model.database.schemaVersion == 11)
         #expect(model.currentTagDefinitions.map(\.name) == ["Design", "Review"])
         #expect(task.tags == ["Design", "Review"])
         #expect(model.currentTagDefinitions.allSatisfy { $0.categoryID == nil })

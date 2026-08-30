@@ -98,6 +98,8 @@ final class SDTask {
     var plannedStart: Date?
     var plannedEnd: Date?
     var plannedPrecisionRaw: String = DeadlinePrecision.minute.rawValue
+    var planRangeIntentRaw: String = TaskPlanRangeIntent.progress.rawValue
+    var executionSlotsJSON: String = "[]"
     var deadline: Date?
     var deadlinePrecisionRaw: String
     var recurrence: String
@@ -112,7 +114,9 @@ final class SDTask {
     init(id: UUID, title: String, workspaceID: UUID, projectID: UUID?, sectionID: UUID?, parentID: UUID?,
          statusRaw: String, priorityRaw: String, actionListRaw: String = ActionList.nextAction.rawValue,
          tagsJSON: String, contextsJSON: String,
-         plannedStart: Date?, plannedEnd: Date?, plannedPrecisionRaw: String, deadline: Date?, deadlinePrecisionRaw: String,
+         plannedStart: Date?, plannedEnd: Date?, plannedPrecisionRaw: String,
+         planRangeIntentRaw: String = TaskPlanRangeIntent.progress.rawValue,
+         executionSlotsJSON: String = "[]", deadline: Date?, deadlinePrecisionRaw: String,
          recurrence: String, note: String, createdAt: Date, updatedAt: Date, completedAt: Date?,
          order: Int, completedInstancesJSON: String, skippedInstancesJSON: String) {
         self.id = id
@@ -129,6 +133,8 @@ final class SDTask {
         self.plannedStart = plannedStart
         self.plannedEnd = plannedEnd
         self.plannedPrecisionRaw = plannedPrecisionRaw
+        self.planRangeIntentRaw = planRangeIntentRaw
+        self.executionSlotsJSON = executionSlotsJSON
         self.deadline = deadline
         self.deadlinePrecisionRaw = deadlinePrecisionRaw
         self.recurrence = recurrence

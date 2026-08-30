@@ -70,6 +70,26 @@ struct ModernContentView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+            } else if model.selection.selectedOrganization == nil,
+                      model.selection.selectedSmartList == .today {
+                VStack(spacing: 0) {
+                    ModernTopBar(
+                        onNewTask: {
+                            showNewTaskEditor = true
+                        }
+                    )
+
+                    HStack(spacing: 0) {
+                        TodayExecutionPane(
+                            quickTaskDraft: $quickTaskDraft,
+                            quickTaskFocused: $quickTaskFocused
+                        )
+                        .frame(minWidth: 650, maxWidth: .infinity, maxHeight: .infinity)
+                        Divider()
+                        TodayContextPane(inspectorNoteFocused: $inspectorNoteFocused)
+                            .frame(width: 390)
+                    }
+                }
             } else if model.selection.selectedOrganization == .tags {
                 ModernTagPane()
                     .frame(width: 300)
@@ -1051,12 +1071,14 @@ struct ModernPomodoroControl: View {
 
     var body: some View {
         if let timer = model.activeTimer, timer.mode == .pomodoro {
+            let clock = pomodoroDisplay(timer: timer, now: now)
             HStack(spacing: 8) {
                 Image(systemName: "timer")
                     .foregroundStyle(ModernPalette.red)
                 Text("番茄钟")
-                Text(pomodoroDisplay(timer: timer, now: now))
+                Text(clock.text)
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(clock.phase == .overtime ? ModernPalette.red : ModernPalette.ink)
                 Button {
                     timer.pausedAt == nil ? model.pauseTimer() : model.resumeTimer()
                 } label: {
@@ -1088,9 +1110,11 @@ struct ModernPomodoroControl: View {
         }
     }
 
-    private func pomodoroDisplay(timer: ActiveTimer, now: Date) -> String {
-        let remaining = max(0, (timer.targetSeconds ?? 25 * 60) - model.timerElapsed(at: now))
-        return modernFormatDuration(remaining)
+    private func pomodoroDisplay(timer: ActiveTimer, now: Date) -> PomodoroClockState {
+        PomodoroClockState.make(
+            targetSeconds: timer.targetSeconds ?? 25 * 60,
+            elapsed: model.timerElapsed(at: now)
+        )
     }
 }
 
@@ -3992,6 +4016,7 @@ struct ModernQuickTaskDraft: Equatable {
 struct ModernQuickTaskComposer: View {
     @Binding var draft: ModernQuickTaskDraft
     @FocusState.Binding var isFocused: Bool
+    var placeholder = "添加任务，按 Enter 创建"
     let onSubmit: () -> Void
     @State private var showPlanEditor = false
     @State private var showDeadlineEditor = false
@@ -4008,7 +4033,7 @@ struct ModernQuickTaskComposer: View {
             .foregroundStyle(ModernPalette.muted)
             .accessibilityLabel("聚焦快速创建任务")
 
-            TextField("添加任务，按 Enter 创建", text: $draft.title)
+            TextField(placeholder, text: $draft.title)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .focused($isFocused)
@@ -5399,6 +5424,7 @@ struct ModernTaskInspector: View {
     @State private var plannedStart: Date
     @State private var plannedEnd: Date
     @State private var plannedPrecision: DeadlinePrecision
+    @State private var planRangeIntent: TaskPlanRangeIntent
     @State private var hasDeadline: Bool
     @State private var deadline: Date
     @State private var deadlinePrecision: DeadlinePrecision
@@ -5421,6 +5447,7 @@ struct ModernTaskInspector: View {
         _plannedStart = State(initialValue: task.plannedStart ?? .now)
         _plannedEnd = State(initialValue: task.plannedEnd ?? task.plannedStart ?? .now)
         _plannedPrecision = State(initialValue: task.plannedPrecision == .none ? .date : task.plannedPrecision)
+        _planRangeIntent = State(initialValue: task.planRangeIntent)
         _hasDeadline = State(initialValue: task.deadline != nil)
         _deadline = State(initialValue: task.deadline ?? .now)
         _deadlinePrecision = State(initialValue: task.deadlinePrecision == .none ? .date : task.deadlinePrecision)
@@ -5557,6 +5584,24 @@ struct ModernTaskInspector: View {
                 .onChange(of: deadline) { _, _ in saveDeadline() }
                 .onChange(of: deadlinePrecision) { _, _ in saveDeadline() }
 
+                if showsPlanRangeIntent {
+                    ModernInspectorPickerRow(
+                        icon: "calendar.day.timeline.left",
+                        title: "跨日方式",
+                        value: planRangeIntent.title
+                    ) {
+                        ForEach(TaskPlanRangeIntent.allCases) { intent in
+                            Button {
+                                planRangeIntent = intent
+                                updateCanonical { $0.planRangeIntent = intent }
+                            } label: {
+                                Label(intent.title, systemImage: intent.icon)
+                            }
+                            .help(intent.explanation)
+                        }
+                    }
+                }
+
                 ModernTaskTimeSection(task: task)
 
                 ModernInspectorValue(title: "子任务", icon: "checklist") {
@@ -5613,6 +5658,7 @@ struct ModernTaskInspector: View {
         plannedStart = task.plannedStart ?? .now
         plannedEnd = task.plannedEnd ?? task.plannedStart ?? .now
         plannedPrecision = task.plannedPrecision == .none ? .date : task.plannedPrecision
+        planRangeIntent = task.planRangeIntent
         hasDeadline = task.deadline != nil
         deadline = task.deadline ?? .now
         deadlinePrecision = task.deadlinePrecision == .none ? .date : task.deadlinePrecision
@@ -5643,7 +5689,13 @@ struct ModernTaskInspector: View {
             $0.plannedStart = normalizedPlan?.start
             $0.plannedEnd = normalizedPlan?.end
             $0.plannedPrecision = hasPlan ? plannedPrecision : .none
+            $0.planRangeIntent = planRangeIntent
         }
+    }
+
+    private var showsPlanRangeIntent: Bool {
+        guard hasPlan, hasPlannedEnd else { return false }
+        return !Calendar.current.isDate(plannedStart, inSameDayAs: plannedEnd)
     }
 
     private func saveDeadline() {

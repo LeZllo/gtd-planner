@@ -4,7 +4,18 @@
 
 GTD Planner is a native macOS GTD task-management tool that brings task capture, project breakdown, planning, actual focus tracking, and review into one workflow.
 
-The project is preparing for its first public release and is still in an early stage.
+The project is in an early stage of public development and will continue to evolve.
+
+## Latest Progress
+
+Recent update: added a Today execution view, together with its data model, persistence support, and regression tests.
+
+- Supports both List and Schedule modes for Today.
+- Shows scheduled, unscheduled, cross-day progress, complete-within-range, and overdue tasks.
+- Keeps the planned-time lane and actual-focus lane separate; planned time, deadlines, and actual focus time remain distinct concepts.
+- Lets users schedule tasks into concrete execution slots, with 15-minute standard snapping or 5-minute fine snapping while dragging.
+- Provides Pomodoro, stopwatch, and manual actual-focus backfill entry points from the Today view.
+- Adds interval-conflict protection for focus records and regression coverage for Today, timeline interaction, and persistence.
 
 ## Implemented Features
 
@@ -21,6 +32,8 @@ The project is preparing for its first public release and is still in an early s
 - Task status, priority, tags, and notes
 - Planned task time and deadlines
 - Record, backfill, edit, and delete actual focus time
+- Today execution view with List/Schedule modes, task categories, execution slots, and progress
+- Separate planned-time and actual-focus lanes in the Today view
 - A project-planning view whose Gantt chart stays aligned with the task tree
 
 ### Execution and Records
@@ -40,7 +53,6 @@ The project is preparing for its first public release and is still in an early s
 ## Planned Features
 
 - Filter management
-- Today view
 - Tomorrow view
 - Next seven days view
 - Eisenhower matrix view

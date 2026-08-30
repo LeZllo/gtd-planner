@@ -1,6 +1,20 @@
 import Foundation
 import Observation
 
+enum TodayViewMode: String, CaseIterable, Identifiable, Sendable {
+    case list
+    case schedule
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .list: "清单"
+        case .schedule: "日程"
+        }
+    }
+}
+
 /// Navigation state is intentionally separate from the database snapshot.
 ///
 /// SwiftUI views can observe this object without observing every mutation made
@@ -15,6 +29,7 @@ final class PlannerSelectionState {
     var selectedSmartList: SmartList = .all
     var selectedArchive: ArchiveItem?
     var plannerView: PlannerView = .list
+    var todayViewMode: TodayViewMode = .schedule
     /// When non-nil, C2 + C3 + C4 are replaced by the C234 focus workspace.
     /// This is navigation state, not timer state: leaving C234 never stops an
     /// active timer, and an active timer remains the persistence source of truth.
