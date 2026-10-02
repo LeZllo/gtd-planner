@@ -29,6 +29,7 @@ final class AppModel {
     var pendingDeletion: DeletionRequest?
 
     let storage: LocalDatabase
+    let preferences: PlannerPreferences
     @ObservationIgnored var saveTask: Task<Void, Never>?
     @ObservationIgnored var workspaceQueryIndex: QueryIndex?
     @ObservationIgnored var projectQueryIndex: QueryIndex?
@@ -127,9 +128,11 @@ final class AppModel {
         let query: String
         let includeSearch: Bool
         let timeToken: Date?
+        let calendar: Calendar?
     }
 
-    init(storage: LocalDatabase = LocalDatabase()) {
+    init(storage: LocalDatabase = LocalDatabase(), preferences: PlannerPreferences = PlannerPreferences()) {
+        self.preferences = preferences
         self.storage = storage
         let loaded = storage.load()
         var normalized = loaded.workspaces.isEmpty ? .fresh() : loaded
@@ -142,11 +145,13 @@ final class AppModel {
         self.database = normalized
         self.selection = PlannerSelectionState(selectedWorkspaceID: normalized.pinnedWorkspaceIDs[0])
         self.selection.focusMode = normalized.activeTimer?.mode
+        self.selection.todayViewMode = preferences.defaultTodayViewMode
     }
 
     /// Deterministic construction for tests and previews. Production still
     /// loads through the persistence-backed initializer above.
-    init(database source: GTDDatabase, storage: LocalDatabase) {
+    init(database source: GTDDatabase, storage: LocalDatabase, preferences: PlannerPreferences = PlannerPreferences()) {
+        self.preferences = preferences
         self.storage = storage
         var normalized = source.workspaces.isEmpty ? .fresh() : source
         normalized.ensureWorkspaceMetadata()
@@ -158,6 +163,7 @@ final class AppModel {
         self.database = normalized
         self.selection = PlannerSelectionState(selectedWorkspaceID: normalized.pinnedWorkspaceIDs[0])
         self.selection.focusMode = normalized.activeTimer?.mode
+        self.selection.todayViewMode = preferences.defaultTodayViewMode
     }
 
     var workspaceIndex: QueryIndex {
@@ -335,38 +341,41 @@ final class AppModel {
         return database.activityLog.sorted { $0.timestamp > $1.timestamp }
     }
 
-    func count(for list: SmartList) -> Int {
-        let now = Date()
-        let calendar = Calendar.current
-        var candidates = taskIndex.tasksByWorkspace[selection.selectedWorkspaceID] ?? []
-        if let projectID = selection.selectedProjectID {
-            candidates.removeAll { $0.projectID != projectID }
-        }
+    func count(for list: SmartList, now: Date = .now, calendar: Calendar = .current) -> Int {
+        // Sidebar destinations always represent the workspace they open,
+        // never the project that happened to be selected before navigation.
+        let candidates = taskIndex.tasksByWorkspace[selection.selectedWorkspaceID] ?? []
         if list == .calendar {
-            return candidates.reduce(into: 0) { count, task in
-                if task.plannedStart != nil { count += 1 }
-            }
+            let month = selection.selectedOrganization == nil && selection.selectedSmartList == .calendar
+                ? selection.calendarDay ?? now : now
+            return CalendarPlanningProjection.make(
+                tasks: candidates, timeEntries: [], month: month,
+                workspaceID: selection.selectedWorkspaceID, now: now, calendar: calendar
+            )?.taskCount ?? 0
         }
         return candidates.reduce(into: 0) { count, task in
             if matchesSmartList(task, target: list, now: now, calendar: calendar) { count += 1 }
         }
     }
 
-    func filteredTasks(for list: SmartList? = nil, includeSearch: Bool = true) -> [GTDTask] {
+    func filteredTasks(
+        for list: SmartList? = nil,
+        includeSearch: Bool = true,
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) -> [GTDTask] {
         // Keep the projection observable even when this call is served by the
         // ignored cache. Without this read, a cache hit can drop SwiftUI's
         // dependency on taskRevision, leaving successful creates/reorders
         // invisible until another selection change rebuilds the view.
         _ = taskRevision
         let target = list ?? selection.selectedSmartList
-        let now = Date()
-        let calendar = Calendar.current
         let normalizedQuery = includeSearch
             ? query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
             : ""
         let timeToken: Date? = switch target {
         case .today, .tomorrow, .recent:
-            calendar.dateInterval(of: .minute, for: now)?.start
+            calendar.startOfDay(for: now)
         default:
             nil
         }
@@ -376,7 +385,8 @@ final class AppModel {
             smartListRawValue: target.rawValue,
             query: normalizedQuery,
             includeSearch: includeSearch,
-            timeToken: timeToken
+            timeToken: timeToken,
+            calendar: timeToken == nil ? nil : calendar
         )
         if let cached = filteredTaskCache[cacheKey] { return cached }
 
@@ -396,6 +406,9 @@ final class AppModel {
         }
 
         let sortedResult = result.sorted(by: TaskDisplayOrdering.flatList)
+        // Keep long-running sessions bounded as queries, calendar settings,
+        // and natural-day windows change. Task mutations still invalidate all.
+        if filteredTaskCache.count >= 128 { filteredTaskCache.removeAll(keepingCapacity: true) }
         filteredTaskCache[cacheKey] = sortedResult
         return sortedResult
     }
@@ -411,16 +424,11 @@ final class AppModel {
                   !TodayExecutionProjection.isCompleted(task, on: now, calendar: calendar) else { return false }
             return TodayExecutionProjection.isRelevant(task, on: now, now: now, calendar: calendar)
         case .tomorrow:
-            guard !task.status.isFinished else { return false }
-            if let start = task.plannedStart, calendar.isDateInTomorrow(start) { return true }
-            return task.deadline.map { calendar.isDateInTomorrow($0) } ?? false
+            return PlanningHorizon.tomorrow.containsUnfinishedTask(task, relativeTo: now, calendar: calendar)
         case .recent:
-            guard !task.status.isFinished else { return false }
-            let startOfToday = calendar.startOfDay(for: now)
-            let end = calendar.date(byAdding: .day, value: 7, to: startOfToday) ?? now
-            return [task.plannedStart, task.deadline].compactMap { $0 }.contains { $0 >= startOfToday && $0 < end }
+            return PlanningHorizon.nextSevenDays.containsUnfinishedTask(task, relativeTo: now, calendar: calendar)
         case .fourSquares:
-            return task.priority == .high && !task.status.isFinished
+            return !task.status.isFinished
         }
     }
 

@@ -107,9 +107,28 @@ enum TodayScheduleDragRules {
         }
 
         let dayStart = calendar.startOfDay(for: day)
-        let start = calendar.date(byAdding: .minute, value: lower, to: dayStart) ?? dayStart
-        let end = calendar.date(byAdding: .minute, value: upper, to: dayStart)
-            ?? start.addingTimeInterval(TimeInterval(step * 60))
+        let dayEnd = calendar.dateInterval(of: .day, for: day)?.end
+            ?? calendar.date(byAdding: .day, value: 1, to: dayStart)
+            ?? dayStart.addingTimeInterval(24 * 3_600)
+        func wallClockTime(for minute: Int) -> Date {
+            if minute >= 24 * 60 { return dayEnd }
+            return calendar.date(
+                bySettingHour: minute / 60, minute: minute % 60, second: 0, of: dayStart,
+                matchingPolicy: .nextTimePreservingSmallerComponents,
+                repeatedTimePolicy: .first
+            ) ?? dayStart
+        }
+        var start = wallClockTime(for: lower)
+        var end = wallClockTime(for: upper)
+        if end <= start {
+            // A missing spring-forward time may normalize past the selected
+            // end. Preserve a positive selection without leaving this day.
+            end = min(dayEnd, start.addingTimeInterval(TimeInterval(max(step, upper - lower) * 60)))
+            if end <= start {
+                end = dayEnd
+                start = max(dayStart, dayEnd.addingTimeInterval(-TimeInterval(step * 60)))
+            }
+        }
         return TodayScheduleDragSelection(id: id, lane: lane, start: start, end: end)
     }
 
@@ -152,7 +171,10 @@ enum TodayScheduleConflictRules {
         blocks: [TodayPlanBlock]
     ) -> Bool {
         blocks.contains { block in
-            block.end > selection.start && block.start < selection.end
+            if block.isPoint {
+                return block.start >= selection.start && block.start < selection.end
+            }
+            return block.end > selection.start && block.start < selection.end
         }
     }
 }
@@ -217,6 +239,7 @@ struct TodayPlanBlock: Identifiable, Hashable, Sendable {
 
 struct TodayExecutionSnapshot: Equatable, Sendable {
     let day: Date
+    let dayInterval: DateInterval?
     let tasks: [GTDTask]
     let completedTasks: [GTDTask]
     let drawerTasks: [GTDTask]
@@ -233,7 +256,25 @@ struct TodayExecutionSnapshot: Equatable, Sendable {
     var overdueCount: Int { overdueTasks.count }
     var waitingCount: Int { drawerTasks.count }
     var plannedDuration: TimeInterval { planBlocks.reduce(0) { $0 + $1.plannedDuration } }
-    var actualDuration: TimeInterval { actualEntries.reduce(0) { $0 + $1.duration } }
+    var actualDuration: TimeInterval {
+        guard let dayInterval else { return 0 }
+        return actualEntries.reduce(0) { $0 + (TaskDayRules.clippedEntry($1, to: dayInterval)?.duration ?? 0) }
+    }
+
+    func filteringTasks(to ids: Set<UUID>) -> TodayExecutionSnapshot {
+        TodayExecutionSnapshot(
+            day: day, dayInterval: dayInterval,
+            tasks: tasks.filter { ids.contains($0.id) },
+            completedTasks: completedTasks.filter { ids.contains($0.id) },
+            drawerTasks: drawerTasks.filter { ids.contains($0.id) },
+            crossDayProgressTasks: crossDayProgressTasks.filter { ids.contains($0.id) },
+            completeWithinTasks: completeWithinTasks.filter { ids.contains($0.id) },
+            overdueTasks: overdueTasks.filter { ids.contains($0.id) },
+            deadlineTasks: deadlineTasks.filter { ids.contains($0.id) },
+            planBlocks: planBlocks.filter { ids.contains($0.taskID) },
+            actualEntries: actualEntries.filter { $0.taskID.map(ids.contains) ?? false }
+        )
+    }
 
     func drawerTasks(for filter: TodayTaskFilter) -> [GTDTask] {
         switch filter {
@@ -266,11 +307,13 @@ enum TodayExecutionProjection {
         day: Date,
         workspaceID: UUID,
         now: Date = .now,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        includeOverdueBacklog: Bool = true
     ) -> TodayExecutionSnapshot {
         guard let dayInterval = calendar.dateInterval(of: .day, for: day) else {
             return TodayExecutionSnapshot(
                 day: day,
+                dayInterval: nil,
                 tasks: [],
                 completedTasks: [],
                 drawerTasks: [],
@@ -286,7 +329,7 @@ enum TodayExecutionProjection {
         let workspaceTasks = sourceTasks.filter { $0.workspaceID == workspaceID }
         let relevantTasks = workspaceTasks.filter { task in
             guard task.status != .cancelled else { return false }
-            return isRelevant(task, on: day, now: now, calendar: calendar)
+            return isRelevant(task, on: day, now: now, calendar: calendar, includeOverdueBacklog: includeOverdueBacklog)
         }
         .sorted { taskSort($0, $1, day: day, now: now, calendar: calendar) }
 
@@ -308,31 +351,31 @@ enum TodayExecutionProjection {
         let crossDayProgressTasks = unfinishedTasks.filter {
             isMultiDayPlan($0, calendar: calendar)
                 && $0.planRangeIntent == .progress
-                && planContains($0, interval: dayInterval)
+                && TaskDayRules.planIntersects($0, interval: dayInterval)
         }
         let completeWithinTasks = unfinishedTasks.filter {
             isMultiDayPlan($0, calendar: calendar)
                 && $0.planRangeIntent == .completeWithin
-                && planContains($0, interval: dayInterval)
+                && TaskDayRules.planIntersects($0, interval: dayInterval)
         }
         let overdueTasks = unfinishedTasks.filter { task in
             task.deadline.map { $0 < now } ?? false
         }
         let deadlineTasks = unfinishedTasks.filter { task in
-            task.deadline.map(dayInterval.contains) ?? false
+            task.deadline.map { TaskDayRules.contains($0, in: dayInterval) } ?? false
         }
         let drawerTasks = unfinishedTasks.filter { !scheduledTaskIDs.contains($0.id) }
 
         let actualEntries = timeEntries
             .filter {
                 $0.workspaceID == workspaceID
-                    && $0.endedAt > dayInterval.start
-                    && $0.startedAt < dayInterval.end
+                    && TaskDayRules.overlaps(start: $0.startedAt, end: $0.endedAt, interval: dayInterval)
             }
             .sorted { $0.startedAt < $1.startedAt }
 
         return TodayExecutionSnapshot(
             day: dayInterval.start,
+            dayInterval: dayInterval,
             tasks: relevantTasks,
             completedTasks: completedTasks,
             drawerTasks: drawerTasks,
@@ -349,30 +392,41 @@ enum TodayExecutionProjection {
         _ task: GTDTask,
         on day: Date,
         now: Date = .now,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        includeOverdueBacklog: Bool = true
     ) -> Bool {
-        guard let interval = calendar.dateInterval(of: .day, for: day) else { return false }
+        guard task.status != .cancelled,
+              let interval = calendar.dateInterval(of: .day, for: day) else { return false }
         if isCompleted(task, on: day, calendar: calendar) { return true }
         guard !task.status.isFinished else { return false }
-        if planContains(task, interval: interval) { return true }
-        if task.executionSlots.contains(where: { $0.end > interval.start && $0.start < interval.end }) { return true }
-        if let deadline = task.deadline, interval.contains(deadline) || deadline < now { return true }
         if isDailyRecurring(task) {
+            guard !TaskDayRules.isSkipped(task, on: day, calendar: calendar) else { return false }
             guard let plannedStart = task.plannedStart else { return true }
             return plannedStart < interval.end
+        }
+        if TaskDayRules.planIntersects(task, interval: interval) { return true }
+        if task.executionSlots.contains(where: { TaskDayRules.overlaps(start: $0.start, end: $0.end, interval: interval) }) { return true }
+        if let deadline = task.deadline {
+            if TaskDayRules.contains(deadline, in: interval) { return true }
+            // Backlog belongs in Today. Browsing another day must not silently
+            // schedule all already-overdue tasks on that day as well.
+            if includeOverdueBacklog, calendar.isDate(day, inSameDayAs: now), deadline < now { return true }
         }
         return false
     }
 
     static func isMultiDayPlan(_ task: GTDTask, calendar: Calendar = .current) -> Bool {
-        guard let start = task.plannedStart, let end = task.plannedEnd else { return false }
-        return !calendar.isDate(start, inSameDayAs: end)
+        guard let start = task.plannedStart, let end = task.plannedEnd, end > start,
+              let firstDay = calendar.dateInterval(of: .day, for: start) else { return false }
+        return end > firstDay.end
     }
 
     static func isDailyRecurring(_ task: GTDTask) -> Bool {
         task.recurrence
             .uppercased()
+            .replacingOccurrences(of: "RRULE:", with: "")
             .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .contains("FREQ=DAILY")
     }
 
@@ -395,19 +449,13 @@ enum TodayExecutionProjection {
         return calendar.isDate(completedAt, inSameDayAs: day)
     }
 
-    private static func planContains(_ task: GTDTask, interval: DateInterval) -> Bool {
-        guard let start = task.plannedStart else { return false }
-        let end = task.plannedEnd ?? start
-        return end >= interval.start && start < interval.end
-    }
-
     private static func planBlocks(
         for task: GTDTask,
         in interval: DateInterval,
         calendar: Calendar
     ) -> [TodayPlanBlock] {
         var blocks = task.executionSlots.compactMap { slot -> TodayPlanBlock? in
-            guard slot.end > slot.start, slot.end > interval.start, slot.start < interval.end else { return nil }
+            guard TaskDayRules.overlaps(start: slot.start, end: slot.end, interval: interval) else { return nil }
             let clippedStart = max(slot.start, interval.start)
             let clippedEnd = min(slot.end, interval.end)
             return TodayPlanBlock(
@@ -421,13 +469,38 @@ enum TodayExecutionProjection {
             )
         }
 
-        if task.plannedPrecision == .minute,
-           !isMultiDayPlan(task, calendar: calendar),
-           let plannedStart = task.plannedStart,
-           plannedStart < interval.end,
-           (task.plannedEnd ?? plannedStart) >= interval.start {
+        var displayedTask = task
+        if task.plannedPrecision == .minute, isDailyRecurring(task),
+           !isMultiDayPlan(task, calendar: calendar), let anchor = task.plannedStart {
+            let offset = calendar.dateComponents([.day], from: calendar.startOfDay(for: anchor), to: interval.start).day ?? 0
+            if offset >= 0 {
+                func shiftedTime(_ date: Date) -> Date? {
+                    guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)) else { return nil }
+                    let components = calendar.dateComponents([.hour, .minute, .second], from: date)
+                    return calendar.date(
+                        bySettingHour: components.hour ?? 0, minute: components.minute ?? 0,
+                        second: components.second ?? 0, of: day,
+                        matchingPolicy: .nextTimePreservingSmallerComponents,
+                        repeatedTimePolicy: .first
+                    )
+                }
+                displayedTask.plannedStart = shiftedTime(anchor)
+                displayedTask.plannedEnd = task.plannedEnd.flatMap(shiftedTime)
+                // A spring-forward gap can move 02:30 past an otherwise valid
+                // 03:00 end. Keep the template's elapsed duration in that case
+                // instead of silently dropping its planned block.
+                if let start = displayedTask.plannedStart, let end = displayedTask.plannedEnd,
+                   end <= start, let originalEnd = task.plannedEnd, originalEnd > anchor {
+                    displayedTask.plannedEnd = start.addingTimeInterval(originalEnd.timeIntervalSince(anchor))
+                }
+            }
+        }
+        if displayedTask.plannedPrecision == .minute,
+           !isMultiDayPlan(displayedTask, calendar: calendar),
+           let plannedStart = displayedTask.plannedStart,
+           TaskDayRules.planIntersects(displayedTask, interval: interval) {
             let clippedStart = max(plannedStart, interval.start)
-            let explicitEnd = task.plannedEnd.map { min($0, interval.end) }
+            let explicitEnd = displayedTask.plannedEnd.map { min($0, interval.end) }
             let displayEnd = explicitEnd ?? min(clippedStart.addingTimeInterval(30 * 60), interval.end)
             blocks.append(
                 TodayPlanBlock(
@@ -435,7 +508,7 @@ enum TodayExecutionProjection {
                     taskID: task.id,
                     title: task.title,
                     start: clippedStart,
-                    end: max(displayEnd, clippedStart.addingTimeInterval(60)),
+                    end: displayEnd,
                     plannedDuration: explicitEnd.map { max(0, $0.timeIntervalSince(clippedStart)) } ?? 0,
                     isPoint: explicitEnd == nil
                 )
@@ -466,7 +539,8 @@ extension AppModel {
     func todayExecutionSnapshot(
         on day: Date = .now,
         now: Date = .now,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        includeOverdueBacklog: Bool = true
     ) -> TodayExecutionSnapshot {
         _ = taskRevision
         return TodayExecutionProjection.make(
@@ -475,13 +549,26 @@ extension AppModel {
             day: day,
             workspaceID: selection.selectedWorkspaceID,
             now: now,
-            calendar: calendar
+            calendar: calendar,
+            includeOverdueBacklog: includeOverdueBacklog
         )
     }
 
     @discardableResult
-    func addExecutionSlot(taskID: UUID, start: Date, end: Date) -> TaskExecutionSlot? {
-        guard end > start, var task = task(withID: taskID) else { return nil }
+    func addExecutionSlot(taskID: UUID, start: Date, end: Date, calendar: Calendar = .current) -> TaskExecutionSlot? {
+        guard end > start, var task = task(withID: taskID),
+              !task.status.isFinished, task.workspaceID == selection.selectedWorkspaceID else { return nil }
+        if TodayExecutionProjection.isDailyRecurring(task) {
+            var day = calendar.startOfDay(for: start)
+            while day < end {
+                guard TaskDayRules.canSchedule(task, on: day, calendar: calendar),
+                      let nextDay = calendar.date(byAdding: .day, value: 1, to: day), nextDay > day else { return nil }
+                day = nextDay
+            }
+        }
+        if let existing = task.executionSlots.first(where: { $0.start == start && $0.end == end }) {
+            return existing
+        }
         let slot = TaskExecutionSlot(start: start, end: end)
         task.executionSlots.append(slot)
         task.executionSlots.sort { $0.start < $1.start }
@@ -491,7 +578,7 @@ extension AppModel {
 
     @discardableResult
     func removeExecutionSlot(taskID: UUID, slotID: UUID) -> Bool {
-        guard var task = task(withID: taskID) else { return false }
+        guard var task = task(withID: taskID), task.workspaceID == selection.selectedWorkspaceID else { return false }
         let originalCount = task.executionSlots.count
         task.executionSlots.removeAll { $0.id == slotID }
         guard task.executionSlots.count != originalCount else { return false }

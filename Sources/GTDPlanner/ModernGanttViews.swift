@@ -417,6 +417,7 @@ private struct ModernGanttTaskRow: View {
             .background(selected ? ModernPalette.blue.opacity(0.09) : .clear)
             .frame(width: gridWidth, height: rowHeight)
         }
+        .plannerTaskActions(taskID: task.id)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(ModernPalette.line.opacity(0.40))
@@ -451,7 +452,7 @@ private struct ModernGanttTaskRow: View {
                             .frame(width: 22, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(task.status == .done ? "重新打开任务" : "完成任务")
+                    .accessibilityLabel(task.status.isFinished ? "重新打开任务" : "完成任务")
 
                     Text(task.title)
                         .font(.system(size: 11.5, weight: task.status.isFinished ? .regular : .medium))
@@ -500,7 +501,7 @@ private struct ModernGanttTaskRow: View {
 
     private var completionColor: Color {
         switch task.status {
-        case .done: ModernPalette.accent
+        case .done: ModernPalette.completion
         case .cancelled: ModernPalette.muted
         default: ModernPalette.muted
         }
@@ -508,7 +509,7 @@ private struct ModernGanttTaskRow: View {
 
     private var statusColor: Color {
         switch task.status {
-        case .done: ModernPalette.accent
+        case .done: ModernPalette.completion
         case .inProgress: ModernPalette.blue
         case .waiting: Color(nsColor: NSColor.systemOrange)
         case .cancelled: ModernPalette.muted

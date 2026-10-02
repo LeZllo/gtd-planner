@@ -8,20 +8,42 @@ struct TodayExecutionPane: View {
 
     @State private var showsWaitingDrawer = false
     @State private var waitingFilter = TodayTaskFilter.all
+    @State private var query = ""
+    @State private var showsTaskPicker = false
 
-    private var day: Date { Calendar.current.startOfDay(for: .now) }
+    var day: Date = Calendar.current.startOfDay(for: .now)
 
     var body: some View {
         @Bindable var selection = model.selection
-        let snapshot = model.todayExecutionSnapshot(on: day)
+        let fullSnapshot = model.todayExecutionSnapshot(on: day)
+        let snapshot = filteredSnapshot(fullSnapshot)
 
         VStack(spacing: 0) {
             TodayExecutionHeader(
                 day: day,
                 mode: $selection.todayViewMode,
-                completedCount: snapshot.completedCount,
-                totalCount: snapshot.totalCount
+                completedCount: fullSnapshot.completedCount,
+                totalCount: fullSnapshot.totalCount
             )
+
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(ModernPalette.muted)
+                TextField("搜索今日任务、项目、标签或笔记", text: $query)
+                    .textFieldStyle(.plain)
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清除今日任务搜索")
+                }
+                Button { showsTaskPicker = true } label: {
+                    Label("安排已有任务", systemImage: "calendar.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .font(.system(size: 11.5))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
 
             TodaySummaryBar(
                 snapshot: snapshot,
@@ -53,8 +75,34 @@ struct TodayExecutionPane: View {
             )
         }
         .background(ModernPalette.canvas)
+        .sheet(isPresented: $showsTaskPicker) {
+            DayPlanningTaskPicker(day: day) { showsTaskPicker = false }
+                .environment(model)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("UI-05 今日执行面板")
+        .onChange(of: snapshot.tasks.map(\.id), initial: true) { _, visible in
+            if let taskID = model.selection.taskSelection?.taskID, !visible.contains(taskID) {
+                model.clearSelectedTask()
+            }
+        }
+        .onAppear {
+            if !quickTaskDraft.hasPlan {
+                quickTaskDraft.plannedStart = day
+                quickTaskDraft.plannedEnd = day
+            }
+        }
+
+    }
+
+    private func filteredSnapshot(_ snapshot: TodayExecutionSnapshot) -> TodayExecutionSnapshot {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return snapshot }
+        let ids = Set(snapshot.tasks.filter { task in
+            [task.title, task.note, model.project(for: task)?.name ?? "", task.tags.joined(separator: " "), task.contexts.joined(separator: " ")]
+                .joined(separator: " ").localizedCaseInsensitiveContains(needle)
+        }.map(\.id))
+        return snapshot.filteringTasks(to: ids)
     }
 
     private func openWaitingDrawer(_ filter: TodayTaskFilter) {
@@ -101,6 +149,9 @@ struct TodayExecutionPane: View {
             tags: quickTaskDraft.tags
         )
         quickTaskDraft.reset()
+        quickTaskDraft.plannedStart = day
+        quickTaskDraft.plannedEnd = day
+        query = ""
     }
 }
 
@@ -178,16 +229,16 @@ private struct TodaySummaryBar: View {
     let onSelectTask: (UUID) -> Void
 
     private var visibleProgressTasks: [GTDTask] {
-        Array(snapshot.crossDayProgressTasks.prefix(2))
+        Array(snapshot.drawerTasks(for: .progress).prefix(2))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
                 summaryButton("待安排", count: snapshot.waitingCount, filter: .all)
-                summaryButton("跨日推进", count: snapshot.crossDayProgressTasks.count, filter: .progress)
-                summaryButton("区间内完成", count: snapshot.completeWithinTasks.count, filter: .completeWithin)
-                summaryButton("逾期", count: snapshot.overdueCount, filter: .overdue, tint: ModernPalette.red)
+                summaryButton("跨日推进", count: snapshot.count(for: .progress), filter: .progress)
+                summaryButton("区间内完成", count: snapshot.count(for: .completeWithin), filter: .completeWithin)
+                summaryButton("逾期", count: snapshot.count(for: .overdue), filter: .overdue, tint: ModernPalette.red)
                 Spacer(minLength: 8)
                 Button {
                     onOpenDrawer(.all)
@@ -213,7 +264,7 @@ private struct TodaySummaryBar: View {
                     TodayProgressSummaryRow(
                         task: task,
                         extraCount: task.id == visibleProgressTasks.last?.id
-                            ? max(0, snapshot.crossDayProgressTasks.count - visibleProgressTasks.count)
+                            ? max(0, snapshot.count(for: .progress) - visibleProgressTasks.count)
                             : 0,
                         onSelect: { onSelectTask(task.id) },
                         onShowMore: { onOpenDrawer(.progress) }
@@ -469,7 +520,7 @@ private struct TodayWaitingTaskRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .popover(isPresented: $showsScheduler, arrowEdge: .trailing) {
-                TodayScheduleEditor(task: task, day: day) {
+                DayScheduleEditor(task: task, day: day) {
                     showsScheduler = false
                 }
                 .environment(model)
@@ -478,16 +529,18 @@ private struct TodayWaitingTaskRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(minHeight: 66)
+        .plannerTaskActions(taskID: task.id, scope: .day(day))
     }
 }
 
-private struct TodayScheduleEditor: View {
+struct DayScheduleEditor: View {
     @Environment(AppModel.self) private var model: AppModel
     let task: GTDTask
     let day: Date
     let onSaved: () -> Void
     @State private var start: Date
     @State private var end: Date
+    @State private var validationMessage: String?
 
     init(task: GTDTask, day: Date, onSaved: @escaping () -> Void) {
         self.task = task
@@ -495,12 +548,8 @@ private struct TodayScheduleEditor: View {
         self.onSaved = onSaved
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: day)
-        let proposedHour: Int
-        if calendar.isDateInToday(day) {
-            proposedHour = min(21, max(8, calendar.component(.hour, from: .now) + 1))
-        } else {
-            proposedHour = 9
-        }
+        let proposedHour = calendar.isDateInToday(day)
+            ? min(21, max(8, calendar.component(.hour, from: .now) + 1)) : 9
         let proposedStart = calendar.date(bySettingHour: proposedHour, minute: 0, second: 0, of: dayStart) ?? dayStart
         _start = State(initialValue: proposedStart)
         _end = State(initialValue: proposedStart.addingTimeInterval(60 * 60))
@@ -511,43 +560,73 @@ private struct TodayScheduleEditor: View {
             ?? DateInterval(start: day, duration: 24 * 60 * 60)
     }
 
+    private var currentTask: GTDTask? { model.task(withID: task.id) }
+
     private var valid: Bool {
-        end > start && start >= dayInterval.start && end <= dayInterval.end
+        guard let currentTask, currentTask.workspaceID == model.selection.selectedWorkspaceID,
+              TaskDayRules.canSchedule(currentTask, on: day, calendar: .current) else { return false }
+        return end > start && start >= dayInterval.start && start < dayInterval.end && end <= dayInterval.end
+    }
+
+    private var hasConflict: Bool {
+        guard end > start else { return false }
+        let selection = TodayScheduleDragSelection(lane: .plan, start: start, end: end)
+        return TodayScheduleConflictRules.planConflicts(
+            with: selection,
+            blocks: model.todayExecutionSnapshot(on: day).planBlocks
+        )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("安排今日时段")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("安排执行时段")
                     .font(.system(size: 14, weight: .semibold))
-                Text(task.title)
+                Text(day.formatted(.dateTime.year().month(.defaultDigits).day(.defaultDigits).weekday(.wide)))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ModernPalette.blue)
+                Text(currentTask?.title ?? "任务已不存在")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(ModernPalette.railInk)
                     .lineLimit(2)
             }
 
-            DatePicker("开始", selection: $start, in: dayInterval.start...dayInterval.end, displayedComponents: .hourAndMinute)
-            DatePicker("结束", selection: $end, in: dayInterval.start...dayInterval.end, displayedComponents: .hourAndMinute)
+            DatePicker("开始", selection: $start, in: dayInterval.start...dayInterval.end, displayedComponents: [.date, .hourAndMinute])
+            DatePicker("结束", selection: $end, in: dayInterval.start...dayInterval.end, displayedComponents: [.date, .hourAndMinute])
 
             if !valid {
-                Text("结束时间必须晚于开始时间，并位于今天之内")
+                Text("请选择当天有效的起止时间；已完成、跳过或移出的任务无法安排")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(ModernPalette.red)
+            } else if hasConflict {
+                Label("与已有计划重叠，仍可安排；相同时段不会重复添加", systemImage: "exclamationmark.triangle")
                     .font(.system(size: 10.5))
                     .foregroundStyle(ModernPalette.red)
             }
+            if let validationMessage {
+                Text(validationMessage).font(.system(size: 10.5)).foregroundStyle(ModernPalette.red)
+            }
+            Text("只添加执行时段，保留原计划和截止时间。结束可设为次日 00:00。")
+                .font(.system(size: 10.5))
+                .foregroundStyle(ModernPalette.muted)
 
             HStack {
                 Spacer()
-                Button("取消", action: onSaved)
+                Button("取消", action: onSaved).keyboardShortcut(.cancelAction)
                 Button("安排") {
-                    guard model.addExecutionSlot(taskID: task.id, start: start, end: end) != nil else { return }
+                    guard valid, model.addExecutionSlot(taskID: task.id, start: start, end: end) != nil else {
+                        validationMessage = "无法安排，请检查任务状态和时间后重试"
+                        return
+                    }
                     onSaved()
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
                 .disabled(!valid)
             }
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(width: 370)
     }
 }
 
@@ -641,13 +720,14 @@ private struct TodayListTaskRow: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: 10) {
             Button {
                 model.toggleTodayCompletion(taskID: task.id, on: day)
             } label: {
                 Image(systemName: completed ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(completed ? ModernPalette.blue : ModernPalette.line)
+                    .foregroundStyle(completed ? ModernPalette.completion : ModernPalette.line)
                     .frame(width: 26, height: 32)
             }
             .buttonStyle(.plain)
@@ -673,8 +753,8 @@ private struct TodayListTaskRow: View {
 
                     HStack(spacing: 8) {
                         if let block = taskBlocks.first {
-                            Text(todayTimeRange(start: block.start, end: block.end))
-                                .foregroundStyle(ModernPalette.blue)
+                            Text(block.isPoint ? block.start.formatted(date: .omitted, time: .shortened) : todayTimeRange(start: block.start, end: block.end))
+                                .foregroundStyle(ModernPalette.accent)
                         } else if task.plannedStart != nil {
                             Text(todayPlanRangeText(task))
                         }
@@ -704,7 +784,7 @@ private struct TodayListTaskRow: View {
                 .help("安排另一个今日时段")
                 .accessibilityLabel("为 \(task.title) 安排今日时段")
                 .popover(isPresented: $showsScheduler, arrowEdge: .trailing) {
-                    TodayScheduleEditor(task: task, day: day) {
+                    DayScheduleEditor(task: task, day: day) {
                         showsScheduler = false
                     }
                     .environment(model)
@@ -727,8 +807,29 @@ private struct TodayListTaskRow: View {
                 .accessibilityLabel("为 \(task.title) 开始正计时")
             }
         }
-        .padding(.horizontal, 8)
         .frame(minHeight: 58)
+        ForEach(taskBlocks.filter { $0.id.source == .executionSlot }) { block in
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                Text(todayTimeRange(start: block.start, end: block.end))
+                Spacer()
+                if let slotID = block.id.slotID {
+                    Button { _ = model.removeExecutionSlot(taskID: task.id, slotID: slotID) } label: {
+                        Image(systemName: "xmark.circle").frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("移除 \(task.title) 的整个执行时段")
+                    .help("移除整个执行时段，保留任务计划和截止时间")
+                }
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(ModernPalette.accent)
+            .padding(.leading, 36)
+            .padding(.bottom, 5)
+        }
+        }
+        .plannerTaskActions(taskID: task.id, scope: .day(day))
+        .padding(.horizontal, 8)
         .background(
             model.isTaskSelected(task.id) ? ModernPalette.blue.opacity(0.055) : .clear,
             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -766,7 +867,7 @@ private struct TodayVerticalSchedule: View {
                         TodayTimelineCanvas(snapshot: snapshot, day: day)
 
                         VStack(spacing: 0) {
-                            ForEach(6..<24, id: \.self) { hour in
+                            ForEach(0..<24, id: \.self) { hour in
                                 Color.clear
                                     .frame(width: 1, height: 64)
                                     .id("hour-\(hour)")
@@ -805,12 +906,17 @@ private struct TodayTimelineCanvas: View {
     @State private var dragSelection: TodayScheduleDragSelection?
     @State private var pendingSelection: TodaySchedulePendingSelection?
 
-    private let startHour = 6
+    private let startHour = 0
     private let endHour = 24
     private let hourHeight: CGFloat = 64
     private let axisWidth: CGFloat = 64
 
     private var totalHeight: CGFloat { CGFloat(endHour - startHour) * hourHeight }
+    private var visibleInterval: DateInterval {
+        DayTimelineLayout.visibleInterval(day: day, startHour: startHour, endHour: endHour)
+            ?? DateInterval(start: Calendar.current.startOfDay(for: day), duration: 24 * 3_600)
+    }
+
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -827,15 +933,19 @@ private struct TodayTimelineCanvas: View {
                         .offset(x: laneWidth)
 
                     ForEach(snapshot.planBlocks) { block in
-                        TodayPlanBlockView(block: block)
-                            .frame(width: max(80, laneWidth - 18), height: blockHeight(start: block.start, end: block.end))
-                            .offset(x: 8, y: yOffset(for: block.start))
+                        if let clipped = DayTimelineLayout.clipped(start: block.start, end: block.end, to: visibleInterval) {
+                            TodayPlanBlockView(block: block)
+                                .frame(width: max(80, laneWidth - 18), height: blockHeight(start: clipped.start, end: clipped.end))
+                                .offset(x: 8, y: yOffset(for: clipped.start))
+                        }
                     }
 
                     ForEach(snapshot.actualEntries) { entry in
-                        TodayActualBlockView(entry: entry)
-                            .frame(width: max(80, laneWidth - 18), height: blockHeight(start: entry.startedAt, end: entry.endedAt))
-                            .offset(x: laneWidth + 10, y: yOffset(for: entry.startedAt))
+                        if let clipped = DayTimelineLayout.clipped(start: entry.startedAt, end: entry.endedAt, to: visibleInterval) {
+                            TodayActualBlockView(entry: entry)
+                                .frame(width: max(80, laneWidth - 18), height: blockHeight(start: clipped.start, end: clipped.end))
+                                .offset(x: laneWidth + 10, y: yOffset(for: clipped.start))
+                        }
                     }
 
                     ForEach(snapshot.deadlineTasks) { task in
@@ -914,22 +1024,15 @@ private struct TodayTimelineCanvas: View {
     }
 
     private func yOffset(for date: Date) -> CGFloat {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.hour, .minute, .second], from: date)
-        let minutes = Double((components.hour ?? 0) * 60 + (components.minute ?? 0))
-            + Double(components.second ?? 0) / 60
-        let visibleMinutes = Double((endHour - startHour) * 60)
-        let normalized = min(visibleMinutes, max(0, minutes - Double(startHour * 60)))
-        return CGFloat(normalized / 60) * hourHeight
+        DayTimelineLayout.yOffset(for: date, in: visibleInterval, startHour: startHour, endHour: endHour, hourHeight: hourHeight)
     }
 
     private func blockHeight(start: Date, end: Date) -> CGFloat {
-        let duration = max(15 * 60, min(4 * 60 * 60, end.timeIntervalSince(start)))
-        return max(24, CGFloat(duration / 3600) * hourHeight - 3)
+        max(24, yOffset(for: end) - yOffset(for: start) - 3)
     }
 
     private func selectionHeight(_ selection: TodayScheduleDragSelection) -> CGFloat {
-        max(24, CGFloat(selection.duration / 3_600) * hourHeight - 3)
+        blockHeight(start: selection.start, end: selection.end)
     }
 
     private func dragSurface(for lane: TodayScheduleLane, laneWidth: CGFloat) -> some View {
@@ -1072,7 +1175,7 @@ private struct TodayLiveTimelineOverlay: View {
     var body: some View {
         SwiftUI.TimelineView(SwiftUI.PeriodicTimelineSchedule(from: .now, by: 1)) { context in
             ZStack(alignment: .topLeading) {
-                if Calendar.current.isDateInToday(day), dayInterval.contains(context.date) {
+                if Calendar.current.isDateInToday(day), TaskDayRules.contains(context.date, in: dayInterval) {
                     Rectangle()
                         .fill(ModernPalette.blue)
                         .frame(width: totalWidth, height: 1.5)
@@ -1098,15 +1201,13 @@ private struct TodayLiveTimelineOverlay: View {
     @ViewBuilder
     private func activeTimerContent(timer: ActiveTimer, now: Date) -> some View {
         let elapsed = model.timerElapsed(at: now)
-        let displayedStart = timer.sessionStartedAt
-        let displayedEnd = displayedStart.addingTimeInterval(max(1, elapsed))
-        if displayedEnd > dayInterval.start, displayedStart < dayInterval.end {
-            let clippedStart = max(displayedStart, dayInterval.start)
-            let clippedEnd = min(displayedEnd, dayInterval.end)
+        if let wallClock = ActiveTimerDisplayRules.wallClockInterval(for: timer, now: now),
+           let clipped = DayTimelineLayout.clipped(start: wallClock.start, end: wallClock.end, to: dayInterval) {
+            let clippedStart = clipped.start
+            let clippedEnd = clipped.end
 
-            if timer.mode == .pomodoro, let target = timer.targetSeconds {
-                let targetDate = timer.sessionStartedAt.addingTimeInterval(target)
-                if dayInterval.contains(targetDate) {
+            if let targetDate = ActiveTimerDisplayRules.targetDate(for: timer, elapsed: elapsed, now: now) {
+                if TaskDayRules.contains(targetDate, in: dayInterval) {
                     Rectangle()
                         .stroke(
                             ModernPalette.red.opacity(0.8),
@@ -1137,16 +1238,11 @@ private struct TodayLiveTimelineOverlay: View {
     }
 
     private func yOffset(for date: Date) -> CGFloat {
-        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
-        let minutes = Double((components.hour ?? 0) * 60 + (components.minute ?? 0))
-            + Double(components.second ?? 0) / 60
-        let visibleMinutes = Double((endHour - startHour) * 60)
-        let normalized = min(visibleMinutes, max(0, minutes - Double(startHour * 60)))
-        return CGFloat(normalized / 60) * hourHeight
+        DayTimelineLayout.yOffset(for: date, in: dayInterval, startHour: startHour, endHour: endHour, hourHeight: hourHeight)
     }
 
     private func blockHeight(start: Date, end: Date) -> CGFloat {
-        max(24, CGFloat(max(1, end.timeIntervalSince(start)) / 3_600) * hourHeight - 3)
+        max(24, yOffset(for: end) - yOffset(for: start) - 3)
     }
 }
 
@@ -1277,7 +1373,9 @@ private struct TodayPlanSelectionPopover: View {
     }
 
     private var hasPlanConflict: Bool {
-        TodayScheduleConflictRules.planConflicts(with: selection, blocks: snapshot.planBlocks)
+        TodayScheduleConflictRules.planConflicts(
+            with: selection, blocks: model.todayExecutionSnapshot(on: snapshot.day).planBlocks
+        )
     }
 
     var body: some View {
@@ -1635,7 +1733,7 @@ private struct TodayPlanBlockView: View {
         .buttonStyle(.plain)
         .contextMenu {
             if block.id.source == .executionSlot, let slotID = block.id.slotID {
-                Button("移除这个今日时段", role: .destructive) {
+                Button("移除整个执行时段", role: .destructive) {
                     _ = model.removeExecutionSlot(taskID: block.taskID, slotID: slotID)
                 }
             }
@@ -1647,10 +1745,12 @@ private struct TodayPlanBlockView: View {
 private struct TodayActualBlockView: View {
     @Environment(AppModel.self) private var model: AppModel
     let entry: TimeEntry
+    @State private var showsEditor = false
+    @State private var confirmsDeletion = false
 
     var body: some View {
         Button {
-            if let taskID = entry.taskID { model.selectTask(taskID) }
+            showsEditor = true
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.title)
@@ -1674,7 +1774,25 @@ private struct TodayActualBlockView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(entry.taskID == nil)
+        .sheet(isPresented: $showsEditor) {
+            if let canonical = model.timeEntry(withID: entry.id) {
+                FocusEntryEditorSheet(entry: canonical, workspaceID: canonical.workspaceID, defaultDate: canonical.startedAt)
+                    .environment(model)
+                    .frame(width: 560, height: 560)
+            }
+        }
+        .contextMenu {
+            Button("编辑实际记录") { showsEditor = true }
+            if let taskID = entry.taskID { Button("查看任务") { model.selectTask(taskID) } }
+            Button("删除实际记录", role: .destructive) { confirmsDeletion = true }
+        }
+        .confirmationDialog("删除这条实际专注记录？", isPresented: $confirmsDeletion, titleVisibility: .visible) {
+            Button("删除", role: .destructive) { _ = model.deleteTimeEntry(withID: entry.id) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除完整记录，不会更改任务计划或截止时间")
+        }
+        .help("点击编辑完整实际记录；右键可删除")
         .accessibilityLabel("实际专注，\(entry.title)，\(todayTimeRange(start: entry.startedAt, end: entry.endedAt))")
     }
 }
@@ -1835,6 +1953,14 @@ private struct TodayTimeInvestmentSection: View {
             Text("实际专注来自正计时、番茄钟与手动补录，不含计划时间")
                 .font(.system(size: 10))
                 .foregroundStyle(ModernPalette.muted)
+            if let interval = snapshot.dayInterval,
+               snapshot.actualEntries.contains(where: {
+                   $0.activeSeconds != nil && ($0.startedAt < interval.start || $0.endedAt > interval.end)
+               }) {
+                Text("跨日计时按覆盖时长比例估算每日专注，原始记录保持完整")
+                    .font(.system(size: 10))
+                    .foregroundStyle(ModernPalette.muted)
+            }
         }
     }
 
@@ -1943,7 +2069,7 @@ private func todayPlanRangeText(_ task: GTDTask) -> String {
 
     let startText = start.formatted(.dateTime.month(.defaultDigits).day(.defaultDigits))
     guard let storedEnd = task.plannedEnd else { return startText }
-    let displayEnd = storedEnd.addingTimeInterval(-1)
+    let displayEnd = storedEnd
     guard !calendar.isDate(start, inSameDayAs: displayEnd) else { return startText }
     return "\(startText) – \(displayEnd.formatted(.dateTime.month(.defaultDigits).day(.defaultDigits)))"
 }

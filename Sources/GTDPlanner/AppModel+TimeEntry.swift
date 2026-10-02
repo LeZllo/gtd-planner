@@ -11,9 +11,10 @@ extension AppModel {
         startedAt: Date,
         endedAt: Date,
         source: TimeEntrySource = .manual,
-        note: String = ""
+        note: String = "",
+        now: Date = .now
     ) -> TimeEntry? {
-        guard endedAt > startedAt,
+        guard endedAt > startedAt, endedAt <= now,
               !hasTimeEntryConflict(
                   workspaceID: workspaceID,
                   startedAt: startedAt,
@@ -46,15 +47,17 @@ extension AppModel {
     /// note, and time range, but never its workspace identity or source
     /// semantics through a task-planning mutation.
     @discardableResult
-    func updateTimeEntry(_ value: TimeEntry) -> Bool {
-        guard value.endedAt > value.startedAt,
+    func updateTimeEntry(_ value: TimeEntry, now: Date = .now) -> Bool {
+        guard let index = database.timeEntries.firstIndex(where: { $0.id == value.id }),
+              database.timeEntries[index].workspaceID == value.workspaceID,
+              value.endedAt > value.startedAt,
+              (value.endedAt <= now || (value.startedAt == database.timeEntries[index].startedAt && value.endedAt == database.timeEntries[index].endedAt)),
               !hasTimeEntryConflict(
                   workspaceID: value.workspaceID,
                   startedAt: value.startedAt,
                   endedAt: value.endedAt,
                   excluding: value.id
-              ),
-              let index = database.timeEntries.firstIndex(where: { $0.id == value.id }) else {
+              ) else {
             return false
         }
 
@@ -62,7 +65,12 @@ extension AppModel {
         // Once a record's boundaries are explicitly edited, its displayed
         // actual duration follows the edited range. This also prevents a
         // paused timer's old active-seconds value from surviving a resize.
-        updated.activeSeconds = updated.endedAt.timeIntervalSince(updated.startedAt)
+        let original = database.timeEntries[index]
+        if updated.startedAt != original.startedAt || updated.endedAt != original.endedAt {
+            updated.activeSeconds = updated.endedAt.timeIntervalSince(updated.startedAt)
+        } else {
+            updated.activeSeconds = original.activeSeconds
+        }
         database.timeEntries[index] = updated
         appendLog(
             action: "编辑实际专注",

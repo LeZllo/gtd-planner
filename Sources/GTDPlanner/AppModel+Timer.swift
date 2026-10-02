@@ -31,11 +31,11 @@ extension AppModel {
 
     func startPomodoro(
         for task: GTDTask?,
-        duration: TimeInterval = 25 * 60,
+        duration: TimeInterval? = nil,
         at now: Date = .now
     ) {
         guard database.activeTimer == nil else { return }
-        let normalizedDuration = normalizedPomodoroDuration(duration)
+        let normalizedDuration = normalizedPomodoroDuration(duration ?? preferences.defaultPomodoroDuration)
         database.activeTimer = ActiveTimer(
             mode: .pomodoro,
             workspaceID: task?.workspaceID ?? selection.selectedWorkspaceID,

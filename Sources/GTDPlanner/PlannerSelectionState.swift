@@ -30,6 +30,9 @@ final class PlannerSelectionState {
     var selectedArchive: ArchiveItem?
     var plannerView: PlannerView = .list
     var todayViewMode: TodayViewMode = .schedule
+    /// A draft destination in future planning, never persisted as task data.
+    var planningDay: Date?
+    var calendarDay: Date?
     /// When non-nil, C2 + C3 + C4 are replaced by the C234 focus workspace.
     /// This is navigation state, not timer state: leaving C234 never stops an
     /// active timer, and an active timer remains the persistence source of truth.

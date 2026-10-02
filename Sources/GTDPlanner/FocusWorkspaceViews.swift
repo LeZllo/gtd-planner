@@ -107,7 +107,7 @@ struct C234FocusWorkspaceView: View {
                 defaultDate: selectedDate
             )
             .environment(model)
-            .frame(width: 480, height: 560)
+            .frame(width: 560, height: 560)
         }
         .confirmationDialog(
             "删除实际专注记录？",
@@ -443,9 +443,18 @@ private struct FocusClockPanel: View {
         // A simultaneous tap keeps the surrounding C234 focus boundary alive
         // without stealing the dial's direct-manipulation gesture.
         .simultaneousGesture(TapGesture().onEnded { onInteraction() })
+        .onAppear {
+            if model.activeTimer == nil { draftPomodoroSeconds = model.preferences.defaultPomodoroDuration }
+        }
+        .onChange(of: model.preferences.defaultPomodoroMinutes) { _, _ in
+            if model.activeTimer == nil { draftPomodoroSeconds = model.preferences.defaultPomodoroDuration }
+        }
+        .onChange(of: model.activeTimer == nil) { _, stopped in
+            if stopped { draftPomodoroSeconds = model.preferences.defaultPomodoroDuration }
+        }
         .onChange(of: mode) { _, newMode in
             guard model.activeTimer == nil, newMode == .pomodoro else { return }
-            draftPomodoroSeconds = 25 * 60
+            draftPomodoroSeconds = model.preferences.defaultPomodoroDuration
         }
     }
 
@@ -2290,7 +2299,7 @@ private struct FocusBackfillPopover: View {
     }
 }
 
-private struct FocusEntryEditorSheet: View {
+struct FocusEntryEditorSheet: View {
     @Environment(AppModel.self) private var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
@@ -2299,12 +2308,12 @@ private struct FocusEntryEditorSheet: View {
     let defaultDate: Date
 
     @State private var taskID: UUID?
-    @State private var entryDate: Date
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var source: TimeEntrySource
     @State private var note: String
     @State private var validationMessage: String?
+    @State private var submitted = false
 
     private let calendar = Calendar.current
 
@@ -2318,7 +2327,6 @@ private struct FocusEntryEditorSheet: View {
         let fallbackStart = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: baseDate) ?? baseDate
         let fallbackEnd = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: baseDate) ?? baseDate.addingTimeInterval(3_600)
         _taskID = State(initialValue: entry?.taskID)
-        _entryDate = State(initialValue: baseDate)
         _startTime = State(initialValue: entry?.startedAt ?? fallbackStart)
         _endTime = State(initialValue: entry?.endedAt ?? fallbackEnd)
         _source = State(initialValue: entry?.source ?? .manual)
@@ -2336,7 +2344,7 @@ private struct FocusEntryEditorSheet: View {
                     Text(entry == nil ? "补录实际专注" : "编辑实际专注")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(ModernPalette.ink)
-                    Text("实际记录独立于计划时间和截止时间")
+                    Text("支持跨日记录；只改备注会保留暂停后的有效时长")
                         .font(.system(size: 11.5))
                         .foregroundStyle(ModernPalette.muted)
                 }
@@ -2366,18 +2374,13 @@ private struct FocusEntryEditorSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    editorField("日期") {
-                        DatePicker("日期", selection: $entryDate, displayedComponents: [.date])
-                            .labelsHidden()
-                    }
-
                     HStack(spacing: 16) {
                         editorField("开始") {
-                            DatePicker("开始", selection: $startTime, displayedComponents: [.hourAndMinute])
+                            DatePicker("开始", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
                                 .labelsHidden()
                         }
                         editorField("结束") {
-                            DatePicker("结束", selection: $endTime, displayedComponents: [.hourAndMinute])
+                            DatePicker("结束", selection: $endTime, displayedComponents: [.date, .hourAndMinute])
                                 .labelsHidden()
                         }
                     }
@@ -2419,13 +2422,15 @@ private struct FocusEntryEditorSheet: View {
             HStack(spacing: 12) {
                 Spacer()
                 Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                     .buttonStyle(.plain)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(ModernPalette.muted)
                 Button(entry == nil ? "补录" : "保存") {
                     save()
                 }
-                .buttonStyle(FocusPrimaryButtonStyle(tint: ModernPalette.blue))
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(FocusPrimaryButtonStyle(tint: ModernPalette.accent))
                 .frame(width: 112)
             }
             .padding(.top, 18)
@@ -2453,36 +2458,40 @@ private struct FocusEntryEditorSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func combinedDate(from time: Date) -> Date {
-        let day = calendar.dateComponents([.year, .month, .day], from: entryDate)
-        let timeComponents = calendar.dateComponents([.hour, .minute], from: time)
-        var components = day
-        components.hour = timeComponents.hour
-        components.minute = timeComponents.minute
-        components.second = 0
-        return calendar.date(from: components) ?? time
-    }
-
     private func save() {
-        let start = combinedDate(from: startTime)
-        let end = combinedDate(from: endTime)
+        guard !submitted else { return }
+        let start = startTime
+        let end = endTime
         guard end > start else {
             validationMessage = "结束时间必须晚于开始时间"
             return
         }
 
+        if end > Date.now, entry == nil || start != entry?.startedAt || end != entry?.endedAt {
+            validationMessage = "实际记录不能结束于未来；请使用计划时段或开始计时"
+            return
+        }
+
         let title = taskID.flatMap(model.task(withID:))?.title ?? "无任务专注"
-        if var entry {
-            entry.taskID = taskID
-            entry.title = title
-            entry.startedAt = start
-            entry.endedAt = end
-            entry.source = source
-            entry.pomodoroPhase = source == .pomodoro ? (entry.pomodoroPhase ?? .focus) : nil
-            entry.note = note
-            entry.activeSeconds = end.timeIntervalSince(start)
-            guard model.updateTimeEntry(entry) else {
-                validationMessage = "这条实际专注记录已经不存在"
+        if let original = entry {
+            guard let current = model.timeEntry(withID: original.id), current.workspaceID == workspaceID else {
+                validationMessage = "这条记录已不存在或已移出当前工作区"
+                return
+            }
+            var draft = original
+            draft.taskID = taskID
+            draft.title = title
+            draft.startedAt = start
+            draft.endedAt = end
+            draft.source = source
+            draft.pomodoroPhase = source == .pomodoro ? (original.pomodoroPhase ?? .focus) : nil
+            draft.note = note
+            guard let merged = TimeEntryEditRules.merge(original: original, draft: draft, current: current) else {
+                validationMessage = "这条记录已在另一窗口修改，请关闭并重新打开后再编辑"
+                return
+            }
+            guard model.updateTimeEntry(merged) else {
+                validationMessage = "时间与已有记录或运行中计时冲突，或记录已不存在"
                 return
             }
         } else {
@@ -2498,6 +2507,7 @@ private struct FocusEntryEditorSheet: View {
                 return
             }
         }
+        submitted = true
         dismiss()
     }
 }

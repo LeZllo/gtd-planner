@@ -70,10 +70,6 @@ struct ContentView: View {
             }
         }
         .animation(.snappy(duration: 0.22), value: model.notice)
-        .sheet(isPresented: $model.showingSettings) {
-            SettingsView()
-                .environment(model)
-        }
     }
 
     private var currentContextTitle: String {
@@ -84,6 +80,7 @@ struct ContentView: View {
 }
 
 struct NativeChromeHeader: View {
+    @Environment(\.openSettings) private var openSettings
     @Environment(AppModel.self) private var model: AppModel
     let title: String
     let timerElapsed: TimeInterval?
@@ -112,7 +109,7 @@ struct NativeChromeHeader: View {
                         .keyboardShortcut("n", modifiers: [.command])
                         .help("新建任务")
                         Menu {
-                            Button("设置…") { model.showingSettings = true }
+                            Button("设置…") { openSettings() }
                             Divider()
                             Button("导出本地备份…") { model.exportDatabase() }
                             Button("导入本地备份…") { model.importDatabase() }
@@ -135,7 +132,7 @@ struct NativeChromeHeader: View {
         .background {
             Rectangle()
                 .fill(.clear)
-                .glassEffect(.clear, in: Rectangle())
+                .background(AppColors.panel)
         }
     }
 }
@@ -208,6 +205,7 @@ struct SmartListsColumn: View {
 }
 
 struct WorkspaceRail: View {
+    @Environment(\.openSettings) private var openSettings
     @Environment(AppModel.self) private var model: AppModel
 
     var body: some View {
@@ -233,7 +231,7 @@ struct WorkspaceRail: View {
                 .buttonStyle(RailIconStyle())
                 .help("统计")
             Spacer()
-            Button { model.showingSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+            Button { openSettings() } label: { Image(systemName: "slider.horizontal.3") }
                 .buttonStyle(RailIconStyle())
                 .help("偏好设置")
             Button { model.showNewProject = true } label: { Image(systemName: "plus") }
@@ -271,7 +269,7 @@ struct ProjectColumn: View {
                 .padding(.bottom, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    ProjectRow(title: "所有项目", icon: "tray.full", count: model.currentProjects.reduce(0) { result, project in result + model.currentTasks.filter { $0.projectID == project.id && !$0.status.isFinished }.count }, color: AppColors.teal, selected: model.selection.selectedOrganization == .projects && model.selection.selectedProjectID == nil) {
+                    ProjectRow(title: "所有项目", icon: "tray.full", count: model.currentProjects.reduce(0) { result, project in result + model.currentTasks.filter { $0.projectID == project.id && !$0.status.isFinished }.count }, color: ModernPalette.accent, selected: model.selection.selectedOrganization == .projects && model.selection.selectedProjectID == nil) {
                         model.selectProject(nil)
                     }
                     ForEach(grouped, id: \.0) { category, projects in
@@ -357,7 +355,7 @@ struct TaskListColumn: View {
             .background {
                 Rectangle()
                     .fill(.clear)
-                    .glassEffect(.clear, in: Rectangle())
+                    .background(AppColors.panel)
             }
             Divider()
             if let active = model.activeTimer {
@@ -481,7 +479,7 @@ struct CalendarDayCell: View {
         VStack(alignment: .leading, spacing: 5) {
             Text(day, format: .dateTime.day())
                 .font(.system(size: 11, weight: calendar.isDateInToday(day) ? .bold : .medium))
-                .foregroundStyle(calendar.isDateInToday(day) ? AppColors.teal : AppColors.muted)
+                .foregroundStyle(calendar.isDateInToday(day) ? ModernPalette.accent : AppColors.muted)
             ForEach(tasks.prefix(3)) { task in
                 Button { model.selectTask(task.id) } label: {
                     HStack(spacing: 4) {
@@ -495,12 +493,12 @@ struct CalendarDayCell: View {
                 }
                 .buttonStyle(.plain)
             }
-            if tasks.count > 3 { Text("+ \(tasks.count - 3) 项").font(.system(size: 9)).foregroundStyle(AppColors.teal) }
+            if tasks.count > 3 { Text("+ \(tasks.count - 3) 项").font(.system(size: 9)).foregroundStyle(ModernPalette.accent) }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: 86, alignment: .topLeading)
         .padding(8)
-        .background(calendar.isDateInToday(day) ? AppColors.teal.opacity(0.06) : AppColors.panel)
+        .background(calendar.isDateInToday(day) ? ModernPalette.accent.opacity(0.06) : AppColors.panel)
         .overlay(Rectangle().stroke(AppColors.line.opacity(0.55), lineWidth: 0.5))
     }
 }
@@ -567,7 +565,7 @@ struct TaskRow: View {
             Button { model.toggleTask(task) } label: {
                 Image(systemName: task.status == .done ? "checkmark.square.fill" : "square")
                     .font(.system(size: 17))
-                    .foregroundStyle(task.status == .done ? AppColors.teal : AppColors.muted)
+                    .foregroundStyle(task.status == .done ? ModernPalette.completion : AppColors.muted)
             }
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 4) {
@@ -606,12 +604,7 @@ struct TaskRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { model.selectTask(task.id) }
-        .contextMenu {
-            Button("编辑任务") { editingTask = task; showTaskEditor = true }
-            Button(task.status == .done ? "重新打开" : "完成任务") { model.toggleTask(task) }
-            Divider()
-            Button("删除任务", role: .destructive) { model.deleteTask(task) }
-        }
+        .plannerTaskActions(taskID: task.id)
     }
 }
 
@@ -624,7 +617,7 @@ struct InspectorColumn: View {
         VStack(spacing: 0) {
             HStack(spacing: 22) {
                 Image(systemName: "info.circle")
-                    .foregroundStyle(AppColors.teal)
+                    .foregroundStyle(ModernPalette.selection)
                 Image(systemName: "list.bullet")
                 Image(systemName: "paperclip")
                 Image(systemName: "clock.arrow.circlepath")
@@ -732,7 +725,10 @@ struct TaskEditor: View {
     @Environment(AppModel.self) private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     let task: GTDTask?
+    var initialPlannedDay: Date? = nil
     @State private var title = ""
+    @State private var submitted = false
+    @State private var openedWorkspaceID: UUID?
     @State private var status: TaskStatus = .open
     @State private var priority: Priority = .none
     @State private var actionList: ActionList = .nextAction
@@ -759,9 +755,9 @@ struct TaskEditor: View {
                 Button("取消") { dismiss() }.keyboardShortcut(.escape)
                 Button(isEditing ? "保存" : "创建任务") { save() }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppColors.teal)
+                    .tint(ModernPalette.accent)
                     .keyboardShortcut(.return)
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !planIsValid)
+                    .disabled(submitted || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !planIsValid)
             }
             .padding(22)
             Divider()
@@ -817,7 +813,17 @@ struct TaskEditor: View {
     }
 
     private func load() {
-        guard let task else { return }
+        openedWorkspaceID = model.selection.selectedWorkspaceID
+        guard let task else {
+            projectID = model.selection.selectedProjectID
+            if let initialPlannedDay {
+                hasPlan = true
+                start = Calendar.current.startOfDay(for: initialPlannedDay)
+                end = start
+                plannedPrecision = .date
+            }
+            return
+        }
         title = task.title; status = task.status; priority = task.priority; actionList = task.actionList; note = task.note
         tags = task.tags.joined(separator: ", "); projectID = task.projectID
         if let startDate = task.plannedStart {
@@ -827,26 +833,56 @@ struct TaskEditor: View {
             }
             plannedPrecision = task.plannedPrecision == .none ? .minute : task.plannedPrecision
         }
-        if let deadlineDate = task.deadline { hasDeadline = true; deadline = deadlineDate; deadlinePrecision = task.deadlinePrecision }
+        if let deadlineDate = task.deadline { hasDeadline = true; deadline = deadlineDate; deadlinePrecision = task.deadlinePrecision == .none ? .date : task.deadlinePrecision }
     }
 
     private func save() {
         let parsedTags = tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        if var existing = task {
+        guard !submitted, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, planIsValid else { return }
+        guard openedWorkspaceID == model.selection.selectedWorkspaceID else {
+            model.notice = "工作区已改变，请重新打开任务编辑器"
+            dismiss()
+            return
+        }
+        submitted = true
+        if let task {
+            guard var existing = model.task(withID: task.id), existing.workspaceID == model.selection.selectedWorkspaceID else {
+                model.notice = "任务已删除或移出当前工作区"
+                dismiss()
+                return
+            }
+            if existing.projectID != projectID {
+                guard model.moveTaskToProject(taskID: existing.id, projectID: projectID),
+                      let moved = model.task(withID: existing.id) else {
+                    submitted = false
+                    model.notice = "项目已不可用，无法移动任务"
+                    return
+                }
+                existing = moved
+            }
             existing.title = title; existing.status = status; existing.priority = priority; existing.actionList = actionList; existing.note = note; existing.tags = parsedTags; existing.projectID = projectID
             existing.plannedStart = normalizedPlan?.start; existing.plannedEnd = normalizedPlan?.end
             existing.plannedPrecision = hasPlan ? plannedPrecision : .none
-            existing.deadline = hasDeadline ? deadline : nil; existing.deadlinePrecision = hasDeadline ? deadlinePrecision : .none
+            existing.deadline = normalizedDeadline; existing.deadlinePrecision = hasDeadline ? deadlinePrecision : .none
             model.updateTask(existing)
         } else {
+            if let projectID, !model.currentProjects.contains(where: { $0.id == projectID }) {
+                submitted = false
+                model.notice = "所选项目已不可用，请重新选择"
+                return
+            }
             model.addTask(title: title, projectID: projectID, status: .open, priority: priority, actionList: actionList,
                           plannedStart: normalizedPlan?.start, plannedEnd: normalizedPlan?.end,
                           plannedPrecision: hasPlan ? plannedPrecision : .none,
-                          deadline: hasDeadline ? deadline : nil,
+                          deadline: normalizedDeadline,
                           deadlinePrecision: hasDeadline ? deadlinePrecision : .none,
                           tags: parsedTags, note: note)
         }
         dismiss()
+    }
+
+    private var normalizedDeadline: Date? {
+        hasDeadline ? TaskDateNormalizer.normalizedDeadline(deadline, precision: deadlinePrecision) : nil
     }
 
     private var planIsValid: Bool {
@@ -882,7 +918,7 @@ struct NewProjectSheet: View {
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button("创建") { model.addProject(name: name, category: category); dismiss() }.buttonStyle(.borderedProminent).tint(AppColors.teal).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("创建") { model.addProject(name: name, category: category); dismiss() }.buttonStyle(.borderedProminent).tint(ModernPalette.accent).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(24)
@@ -890,28 +926,10 @@ struct NewProjectSheet: View {
     }
 }
 
+/// Compatibility wrapper for inactive legacy entry points; the app uses one
+/// native Settings scene for all current navigation.
 struct SettingsView: View {
-    @Environment(AppModel.self) private var model: AppModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack { Text("GTD Planner 设置").font(.system(size: 18, weight: .semibold)); Spacer(); Button("完成") { dismiss() } }
-            Form {
-                Section("本地数据") {
-                    LabeledContent("SwiftData 存储") { Text(model.storage.storeURL.path).font(.system(size: 11, design: .monospaced)).foregroundStyle(AppColors.muted).lineLimit(2) }
-                    LabeledContent("工作区") { Text(model.database.workspaces.map(\.name).joined(separator: "、")) }
-                }
-                Section("关于") {
-                    Text("独立版使用本地 SwiftData 持久化与 JSON 备份；计划时间、截止时间与实际时间记录始终分开保存。")
-                        .foregroundStyle(AppColors.muted)
-                }
-            }
-            .formStyle(.grouped)
-        }
-        .padding(22)
-        .frame(width: 560, height: 330)
-    }
+    var body: some View { PlannerSettingsView() }
 }
 
 struct HeaderMark: View {
@@ -919,7 +937,7 @@ struct HeaderMark: View {
     let subtitle: String
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 21)).foregroundStyle(AppColors.teal)
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 21)).foregroundStyle(ModernPalette.accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 15, weight: .semibold, design: .rounded))
                 Text(subtitle).font(.system(size: 10)).foregroundStyle(AppColors.muted)
@@ -942,8 +960,8 @@ struct SearchField: View {
         .padding(.vertical, 9)
         .background {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(.clear)
-                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .fill(AppColors.row)
+                .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(AppColors.line, lineWidth: 0.75) }
         }
     }
 }
@@ -1008,11 +1026,12 @@ struct AppleSidebarRow: View {
 }
 
 struct AppleSidebarButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.86 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 1), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 1), value: configuration.isPressed)
     }
 }
 
@@ -1030,9 +1049,9 @@ struct SmartListRow: View {
                 Text("\(count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(AppColors.muted).padding(.horizontal, 7).padding(.vertical, 4).background(AppColors.subtle, in: Capsule())
             }
             .font(.system(size: 12, weight: selected ? .semibold : .regular))
-            .foregroundStyle(selected ? AppColors.teal : AppColors.ink)
+            .foregroundStyle(selected ? ModernPalette.selection : AppColors.ink)
             .padding(.horizontal, 11).padding(.vertical, 8)
-            .background(selected ? AppColors.teal.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(selected ? ModernPalette.selection.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.plain)
     }
 }
@@ -1083,7 +1102,7 @@ struct EmptyColumnHint: View {
         icon: String,
         title: String,
         message: String,
-        iconColor: Color = AppColors.teal.opacity(0.65)
+        iconColor: Color = ModernPalette.accent.opacity(0.65)
     ) {
         self.icon = icon
         self.title = title
@@ -1123,7 +1142,7 @@ struct ChildrenSummary: View {
     let task: GTDTask
     var body: some View {
         let children = model.children(of: task)
-        if !children.isEmpty { VStack(alignment: .leading, spacing: 7) { Text("子任务").font(.system(size: 12, weight: .semibold)); Text("已完成 \(children.filter { $0.status == .done }.count) / \(children.count)").font(.system(size: 11)).foregroundStyle(AppColors.muted); ProgressView(value: Double(children.filter { $0.status == .done }.count), total: Double(children.count)).tint(AppColors.teal) } }
+        if !children.isEmpty { VStack(alignment: .leading, spacing: 7) { Text("子任务").font(.system(size: 12, weight: .semibold)); Text("已完成 \(children.filter { $0.status == .done }.count) / \(children.count)").font(.system(size: 11)).foregroundStyle(AppColors.muted); ProgressView(value: Double(children.filter { $0.status == .done }.count), total: Double(children.count)).tint(ModernPalette.completion) } }
     }
 }
 
@@ -1168,14 +1187,15 @@ struct TimerCapsule: View {
         .background {
             Capsule()
                 .fill(.clear)
-                .glassEffect(.clear.tint(tint.opacity(0.13)).interactive(false), in: Capsule())
+                .plannerControlSurface(in: Capsule(), tint: tint.opacity(0.13))
         }
     }
 }
 
 struct QuietIconButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var size: CGFloat = 28
-    func makeBody(configuration: Configuration) -> some View { configuration.label.font(.system(size: 13, weight: .medium)).foregroundStyle(AppColors.muted).frame(width: size, height: size).background(configuration.isPressed ? AppColors.subtle : .clear, in: RoundedRectangle(cornerRadius: 7)).scaleEffect(configuration.isPressed ? 0.94 : 1) }
+    func makeBody(configuration: Configuration) -> some View { configuration.label.font(.system(size: 13, weight: .medium)).foregroundStyle(AppColors.muted).frame(width: size, height: size).background(configuration.isPressed ? AppColors.subtle : .clear, in: RoundedRectangle(cornerRadius: 7)).scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1) }
 }
 
 struct ChromeIconButtonStyle: ButtonStyle {
@@ -1184,14 +1204,13 @@ struct ChromeIconButtonStyle: ButtonStyle {
             .font(.system(size: 16, weight: .medium))
             .foregroundStyle(AppColors.ink)
             .frame(width: 34, height: 34)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .animation(.spring(response: 0.24, dampingFraction: 1), value: configuration.isPressed)
+            .plannerControlSurface(in: Circle(), interactive: true)
     }
 }
 
 struct RailIconStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label.font(.system(size: 17)).foregroundStyle(AppColors.muted).frame(width: 38, height: 38).background(configuration.isPressed ? AppColors.subtle : .clear, in: RoundedRectangle(cornerRadius: 11)).scaleEffect(configuration.isPressed ? 0.95 : 1) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View { configuration.label.font(.system(size: 17)).foregroundStyle(AppColors.muted).frame(width: 38, height: 38).background(configuration.isPressed ? AppColors.subtle : .clear, in: RoundedRectangle(cornerRadius: 11)).scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1) }
 }
 
 struct PillButtonStyle: ButtonStyle {
@@ -1202,17 +1221,7 @@ struct PillButtonStyle: ButtonStyle {
             .foregroundStyle(tint)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background {
-                Capsule()
-                    .fill(.clear)
-                    .glassEffect(
-                        .clear
-                            .tint(tint.opacity(configuration.isPressed ? 0.20 : 0.12))
-                            .interactive(),
-                        in: Capsule()
-                    )
-            }
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .plannerControlSurface(in: Capsule(), tint: tint.opacity(configuration.isPressed ? 0.20 : 0.12), interactive: true)
     }
 }
 
@@ -1223,18 +1232,17 @@ enum AppColors {
     static let panel = Color(nsColor: NSColor.textBackgroundColor)
     static let sidebar = Color(nsColor: NSColor.windowBackgroundColor)
     static let sidebarRow = Color(nsColor: NSColor.controlBackgroundColor)
-    static let sidebarSelected = Color(nsColor: NSColor.unemphasizedSelectedContentBackgroundColor)
+    static let sidebarSelected = PlannerTheme.selection.opacity(0.09)
     static let sidebarStroke = Color(nsColor: NSColor.separatorColor)
     static let sidebarInk = Color(nsColor: NSColor.labelColor)
-    static let sidebarSelection = Color(red: 0.86, green: 0.95, blue: 0.93)
-    static let sidebarSelectedInk = Color(red: 0.04, green: 0.32, blue: 0.29)
-    // Sidebar selection follows the app's restrained teal accent. The main
-    // content selection remains the native macOS blue, like Mail.
-    static let sidebarAccent = Color(nsColor: NSColor.systemTeal)
+    static let sidebarSelection = PlannerTheme.selection.opacity(0.09)
+    static let sidebarSelectedInk = PlannerTheme.selection
+    // Legacy/shared components use the same interaction theme as ModernPalette.
+    static let sidebarAccent = PlannerTheme.accent
     static let sidebarCountBackground = Color(nsColor: NSColor.quaternaryLabelColor).opacity(0.14)
-    static let selection = Color(nsColor: NSColor.selectedContentBackgroundColor)
-    static let selectionInk = Color(nsColor: NSColor.alternateSelectedControlTextColor)
-    static let mailSelected = Color(nsColor: NSColor.unemphasizedSelectedContentBackgroundColor)
+    static let selection = PlannerTheme.selection
+    static let selectionInk = Color(nsColor: NSColor.labelColor)
+    static let mailSelected = PlannerTheme.selection.opacity(0.09)
     static let sectionTitle = Color(nsColor: NSColor.secondaryLabelColor)
     static let row = Color(nsColor: NSColor.controlBackgroundColor)
     static let subtle = Color(nsColor: NSColor.controlBackgroundColor)

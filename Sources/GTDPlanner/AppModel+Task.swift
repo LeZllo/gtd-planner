@@ -334,7 +334,7 @@ extension AppModel {
 
     func toggleTask(_ taskID: UUID) {
         guard let task = task(withID: taskID) else { return }
-        setTaskStatus(taskID, to: task.status == .done ? .open : .done)
+        setTaskStatus(taskID, to: task.status.isFinished ? .open : .done)
     }
 
     /// Compatibility entry point for older views. Resolve by stable identity

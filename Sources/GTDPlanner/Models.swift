@@ -209,7 +209,7 @@ enum SmartList: String, CaseIterable, Identifiable, Sendable {
         case .inbox: "收集箱"
         case .today: "今天"
         case .tomorrow: "明天"
-        case .recent: "最近七天"
+        case .recent: "未来七天"
         case .fourSquares: "四象限"
         case .calendar: "日历"
         }

@@ -4,6 +4,8 @@ extension AppModel {
     func selectWorkspace(_ id: UUID) {
         guard database.workspaces.contains(where: { $0.id == id }) else { return }
         selection.selectedWorkspaceID = id
+        selection.planningDay = nil
+        selection.calendarDay = nil
         selection.selectedArchive = nil
         selection.selectedProjectID = nil
         selection.selectedTag = nil

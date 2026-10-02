@@ -8,14 +8,21 @@ The project is in an early stage of public development and will continue to evol
 
 ## Latest Progress
 
-Recent update: added a Today execution view, together with its data model, persistence support, and regression tests.
+Today, Tomorrow, Next Seven Days, the Eisenhower matrix, and the month calendar are now wired into the main interface. They share canonical task data, the inspector, scheduling services, and a blue interaction theme.
 
-- Supports both List and Schedule modes for Today.
-- Shows scheduled, unscheduled, cross-day progress, complete-within-range, and overdue tasks.
-- Keeps the planned-time lane and actual-focus lane separate; planned time, deadlines, and actual focus time remain distinct concepts.
-- Lets users schedule tasks into concrete execution slots, with 15-minute standard snapping or 5-minute fine snapping while dragging.
-- Provides Pomodoro, stopwatch, and manual actual-focus backfill entry points from the Today view.
-- Adds interval-conflict protection for focus records and regression coverage for Today, timeline interaction, and persistence.
+- **Today:** task search, List/Schedule modes, existing-task scheduling, full 00:00–24:00 planned/actual lanes, 15-minute or 5-minute drag snapping, and actual-record editing.
+- **Tomorrow / Next Seven Days:** local calendar-day groups. The seven-day window starts tomorrow and excludes today. Cross-day tasks may appear in several groups; the header deduplicates tasks, while sidebar badges count tasks with unfinished occurrences.
+- **Eisenhower matrix:** all unfinished tasks in the current workspace. High priority means important; a deadline today or earlier means urgent. Supports search, creation, explicit priority/deadline changes, scheduling, inspection, and whole-task completion.
+- **Month calendar:** complete week grids, previous/next month and Today navigation, adjoining-month selection, selected-day creation/scheduling/search, and completion rules that distinguish today, historical daily instances, and future plans.
+- **Shared rules:** adding/removing execution slots preserves the original plan and deadline; identical slot submissions are idempotent. New actual records cannot end in the future. Cross-day actual records retain their full boundaries and are clipped only for daily display and statistics.
+- **Settings and task actions:** native General/Appearance/Data/About tabs, persisted workspace/view/appearance/Pomodoro defaults, and shared task actions for date-scoped completion, scheduling, editing, single-item duplication, and confirmed deletion.
+- **Replacement protection:** JSON restore and Obsidian migration confirm whole-database replacement and create a backup first. Running or paused timers block replacement; cancellation does not write data.
+- **Liquid Glass:** native macOS 26 `glassEffect(.regular)` is used for toolbar/navigation controls, with `GlassEffectContainer` coordinating the top bar. Lists, task cards, editors, and search inputs retain adaptive opaque surfaces. Reduce Transparency or Increase Contrast selects solid surfaces; Reduce Motion disables interactive glass movement.
+- **Consistent theme:** primary actions, completion checkmarks, selection, and default native-control tint share dynamic system blue. Warning, timer-phase, and custom project/tag colors retain their meanings.
+
+This describes implemented source scope, not a passing runtime result. This Linux environment has neither a Swift toolchain nor the macOS SDK; this iteration's tests, application build, and native acceptance checks have not run. The historical 60-test result and the first-stage checkpoint do not validate this expanded version.
+
+Start local verification with the [page-by-page manual checklist](MANUAL_QA.md). See also [QA status](design-qa.md), [five-view planning semantics](docs/planning-design.md), and [theme consistency notes](docs/theme-consistency.md) (in Chinese).
 
 ## Implemented Features
 
@@ -32,8 +39,11 @@ Recent update: added a Today execution view, together with its data model, persi
 - Task status, priority, tags, and notes
 - Planned task time and deadlines
 - Record, backfill, edit, and delete actual focus time
-- Today execution view with List/Schedule modes, task categories, execution slots, and progress
-- Separate planned-time and actual-focus lanes in the Today view
+- Today execution view with search, List/Schedule modes, task categories, execution slots, and progress
+- Separate 00:00–24:00 planned/actual lanes in Today, cross-day record editing, and paused-timer display
+- Tomorrow/Next Seven Days planning panels with day groups, existing-task scheduling, concrete slots, unique-task summaries, and creation on a selected date
+- Eisenhower matrix with priority/deadline classification, search, creation, scheduling, and explicit field changes
+- Month calendar with navigation, selected-day search, creation, scheduling, and date-aware completion
 - A project-planning view whose Gantt chart stays aligned with the task tree
 
 ### Execution and Records
@@ -42,6 +52,8 @@ Recent update: added a Today execution view, together with its data model, persi
 - Pomodoro timer and stopwatch, with pause, resume, and stop
 - Trash: restore accidentally deleted projects, workspaces, and other content
 - Operation log: review actions performed in the application
+- Four-tab native Settings with appearance, Today mode, and new-session Pomodoro defaults
+- Shared context/more-action menus, single-item duplication, and deletion to Trash
 
 ### Data and Import
 
@@ -50,15 +62,13 @@ Recent update: added a Today execution view, together with its data model, persi
 - JSON backup import and export
 - Import GTD tasks, project hierarchy, task notes, and actual time entries from an Obsidian vault
 
-## Planned Features
+## Remaining Work
 
 - Filter management
-- Tomorrow view
-- Next seven days view
-- Eisenhower matrix view
-- Calendar view
+- Full RRULE recurrence support
+- Native macOS build, page-by-page interaction, visual and accessibility validation, and further interaction improvements
 
-The project will continue improving implemented features, including interaction details, stability, and visual polish, while gradually adding the planned views and management capabilities above.
+The matrix and month calendar have the basic workflows described above. Advanced interactions such as dragging between quadrants or rescheduling by dragging across calendar cells are outside the current scope.
 
 ## Requirements
 
@@ -88,6 +98,8 @@ Application data is stored locally at:
 
 The app stores data locally. On first launch it creates only an empty default workspace and does not automatically add demo tasks or upload user data.
 
+Restoring JSON or migrating from Obsidian replaces the entire task database, including all workspaces. The app confirms this and creates a pre-replacement snapshot in `Backups` beside the database. These backups may contain private information. Appearance, Today mode, and Pomodoro duration are device-local preferences excluded from JSON backups; the default workspace remains database metadata.
+
 Obsidian import is a one-time migration operation. The app reads tasks with `type: gtd-task`, project hierarchy, task notes, and `gtd-time-entry` records; runtime data is managed by SwiftData.
 
 Please do not commit personal databases, JSON backups, or vaults containing real tasks to GitHub.
@@ -100,7 +112,10 @@ Tests/GTDPlannerTests/ Regression tests
 Package.swift          Swift Package configuration
 Info.plist             macOS application configuration
 build-app.sh           Local build script
+MANUAL_QA.md           Page-by-page local acceptance steps (Chinese)
 design-qa.md           Public QA notes
+docs/planning-design.md Five-view planning semantics (Chinese)
+docs/theme-consistency.md Theme consistency notes (Chinese)
 README.md              Chinese documentation
 ```
 
@@ -115,9 +130,14 @@ The project does not bundle custom fonts, icon files, or third-party icon librar
 ## Current Limitations
 
 - macOS 26 or later is currently required.
-- No signed, notarized, or prebuilt download package is provided yet; users need to build the app locally.
+- Task mutations do not have global Undo; recover deleted tasks through Trash rather than relying on ⌘Z. Native focus and multi-window behavior for settings and shortcuts is still unverified.
+- No Developer ID-signed, notarized, or prebuilt download package is provided yet. The build script currently expects an Apple Silicon `arm64-apple-macosx` output path; Intel Mac packaging is unverified.
 - Persistence, timer, and logging services are still coordinated by the application model and will be further separated and refined.
-- Automated tests primarily cover data-layer and interaction regressions; complete visual and system-window verification still needs to be performed on macOS.
+- Daily recurrence currently recognizes only `FREQ=DAILY`, using a start date and completed/skipped instance dates. Full RRULE semantics, including `INTERVAL`, `COUNT`, `UNTIL`, and other frequencies, are not implemented.
+- Cross-day focus statistics leave canonical records unchanged. Paused sessions retain only total `activeSeconds`, not pause segments, so active time per day is estimated in proportion to the intersecting wall-clock duration.
+- Planned duration sums concrete time blocks. Date-only ranges are not treated as full-day workloads, and distinct overlapping blocks are still counted separately.
+- Today uses a fixed 00–24 civil-clock axis. Repeated fall-back hours are not separate rows; pixel height must not be interpreted as elapsed duration.
+- Automated cases primarily cover data-layer and interaction regressions. This iteration's tests have not been run; native visual, keyboard, accessibility, and system-window checks remain necessary on macOS.
 
 ## Contributing
 

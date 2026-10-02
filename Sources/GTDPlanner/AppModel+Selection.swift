@@ -12,6 +12,29 @@ extension AppModel {
         )
     }
 
+    /// Explicit date-view creation has a visible contextual default. Other
+    /// contexts still create tasks without an implicit plan or deadline.
+    func defaultTaskPlanningDay(now: Date = .now, calendar: Calendar = .current) -> Date? {
+        guard selection.selectedOrganization == nil, selection.selectedArchive == nil,
+              selection.focusMode == nil, selection.selectedProjectID == nil else { return nil }
+        switch selection.selectedSmartList {
+        case .today:
+            return calendar.startOfDay(for: now)
+        case .calendar:
+            return calendar.startOfDay(for: selection.calendarDay ?? now)
+        case .tomorrow, .recent:
+            let horizon: PlanningHorizon = selection.selectedSmartList == .tomorrow ? .tomorrow : .nextSevenDays
+            let days = horizon.days(relativeTo: now, calendar: calendar)
+            if let selected = selection.planningDay,
+               let day = days.first(where: { calendar.isDate($0, inSameDayAs: selected) }) {
+                return day
+            }
+            return days.first
+        default:
+            return nil
+        }
+    }
+
     func selectTask(_ id: UUID) {
         guard taskIndex.taskByID[id] != nil else { return }
         selection.selectTask(TaskSelection(taskID: id, context: currentTaskSelectionContext))
@@ -30,10 +53,12 @@ extension AppModel {
         selection.selectedArchive = nil
         selection.selectedOrganization = nil
         selection.selectedSmartList = list
+        selection.planningDay = nil
+        selection.calendarDay = nil
         selection.selectedProjectID = nil
         selection.selectedTag = nil
         clearSelectedTask()
-        if list == .calendar { selection.plannerView = .calendar }
+        selection.plannerView = list == .calendar ? .calendar : .list
     }
 
     func selectProject(_ id: UUID?) {

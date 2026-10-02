@@ -25,6 +25,7 @@ final class LocalDatabase: @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let lock = NSLock()
+    private var writeGeneration: UInt64 = 0
     private let encoder: JSONEncoder
     private let exportEncoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -112,9 +113,17 @@ final class LocalDatabase: @unchecked Sendable {
         }
     }
 
-    func save(_ database: GTDDatabase) throws {
+    func advanceWriteGeneration() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
+        writeGeneration &+= 1
+        return writeGeneration
+    }
+
+    func save(_ database: GTDDatabase, expectedGeneration: UInt64? = nil) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let expectedGeneration, expectedGeneration != writeGeneration { return }
         guard let container else {
             throw LocalDatabaseError.swiftDataUnavailable(containerError)
         }
