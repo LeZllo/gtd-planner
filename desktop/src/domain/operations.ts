@@ -1,5 +1,5 @@
 import type { GTDDatabase, GTDTask, ActiveTimer, TimerMode, TrashItem } from './types.js';
-import { dayKey, dateDay, dayBounds, localDate, supportsDailyRecurrence, isDayKey } from './dates.js';
+import { dayKey, dateDay, dayBounds, localDate, supportsDailyRecurrence, isDayKey, deadlineInstant } from './dates.js';
 import { idKey, sameID, validateDatabase } from './validation.js';
 
 const uuid = () => crypto.randomUUID();
@@ -36,12 +36,12 @@ function subtreeIDs(db: GTDDatabase, root: string): Set<string> {
   const queue = [idKey(root)]; for (let i = 0; i < queue.length; i++) for (const id of children.get(queue[i]) ?? []) if (!ids.has(id)) { ids.add(id); queue.push(id); }
   return ids;
 }
-export function updateTask(db: GTDDatabase, id: string, patch: Partial<GTDTask>): GTDDatabase {
+export function updateTask(db: GTDDatabase, id: string, patch: Partial<GTDTask>, at = new Date()): GTDDatabase {
   const previous = lookup(db, id);
   if (patch.id != null && !sameID(patch.id, id)) throw new Error('Stable task IDs cannot change');
   if (patch.workspaceID != null && !sameID(patch.workspaceID, previous.workspaceID)) throw new Error('Moving tasks across workspaces is not supported');
   if (patch.title !== undefined && !patch.title.trim()) throw new Error('Task title is required');
-  const now = instant(); let next = { ...previous, ...patch, id: previous.id, workspaceID: previous.workspaceID, updatedAt: now };
+  const now = instant(at); let next = { ...previous, ...patch, id: previous.id, workspaceID: previous.workspaceID, updatedAt: now };
   const descendants = subtreeIDs(db, id);
   if (next.parentID && descendants.has(idKey(next.parentID))) throw new Error('A task cannot be moved inside itself or its descendants');
   if (Object.prototype.hasOwnProperty.call(patch, 'parentID') && next.parentID) {
@@ -74,8 +74,8 @@ export function updateTask(db: GTDDatabase, id: string, patch: Partial<GTDTask>)
   return checked({ ...db, tasks });
 }
 /** Pure projection: no timestamp mutation or per-tick persistence. */
-export function tasksForDay(db: GTDDatabase, workspaceID: string, day: string): GTDTask[] {
-  const [start, end] = dayBounds(day), today = dayKey(new Date());
+export function tasksForDay(db: GTDDatabase, workspaceID: string, day: string, now = new Date()): GTDTask[] {
+  const [start, end] = dayBounds(day), today = dayKey(now);
   const overlaps = (s: string, e?: string | null) => { const a = localDate(s).getTime(), b = e ? localDate(e).getTime() : a; return b > a ? a < end && b > start : a >= start && a < end; };
   return sorted(db.tasks.filter(task => {
     if (!sameID(task.workspaceID, workspaceID) || task.status === 'cancelled') return false;
@@ -90,7 +90,7 @@ export function tasksForDay(db: GTDDatabase, workspaceID: string, day: string): 
       else if (overlaps(task.plannedStart, task.plannedEnd)) return true;
     }
     if (task.executionSlots.some(slot => overlaps(slot.start, slot.end))) return true;
-    if (task.deadline) return dateDay(task.deadline) === day || (day === today && dateDay(task.deadline) < today);
+    if (task.deadline) return dateDay(task.deadline) === day || (day === today && deadlineInstant(task)! < now.getTime());
     return false;
   }));
 }
@@ -107,20 +107,20 @@ export function taskTree(db: GTDDatabase, workspaceID: string, projectID?: strin
   if (result.length !== tasks.length) throw new Error('Task hierarchy contains a cycle');
   return result;
 }
-export function completeTask(db: GTDDatabase, id: string, day?: string): GTDDatabase {
+export function completeTask(db: GTDDatabase, id: string, day?: string, now = new Date()): GTDDatabase {
   const task = lookup(db, id);
-  if (day !== undefined && (!isDayKey(day) || day > dayKey(new Date()))) throw new Error('Only today or a past daily occurrence can be completed');
+  if (day !== undefined && (!isDayKey(day) || day > dayKey(now))) throw new Error('Only today or a past daily occurrence can be completed');
   if (task.status === 'done' || task.status === 'cancelled') return db;
   if (supportsDailyRecurrence(task)) {
-    const token = day ?? dayKey(new Date());
+    const token = day ?? dayKey(now);
     if (task.completedInstances.includes(token)) return db;
     if (task.skippedInstances.includes(token)) throw new Error('This occurrence was skipped');
     if (task.plannedStart && token < dateDay(task.plannedStart)) throw new Error('This occurrence is before the recurrence starts');
-    return updateTask(db, id, { completedInstances: [...task.completedInstances, token] });
+    return updateTask(db, id, { completedInstances: [...task.completedInstances, token] }, now);
   }
   if (task.recurrence.trim()) throw new Error('Completing this recurrence is not supported. Its rule has been preserved.');
-  if (day && day !== dayKey(new Date())) throw new Error('Historical nonrecurring tasks cannot be backdated');
-  return updateTask(db, id, { status: 'done' });
+  if (day && day !== dayKey(now)) throw new Error('Historical nonrecurring tasks cannot be backdated');
+  return updateTask(db, id, { status: 'done' }, now);
 }
 export function moveTask(db: GTDDatabase, id: string, targetID: string, placement: 'before' | 'after' | 'inside'): GTDDatabase {
   const source = lookup(db, id), target = lookup(db, targetID);
@@ -144,12 +144,34 @@ export function timerSeconds(timer: ActiveTimer, now = new Date()): number {
   instant(now); const elapsed = timer.pausedAt ? 0 : Math.max(0, (now.getTime() - Date.parse(timer.startedAt)) / 1000);
   return Math.max(0, timer.accumulatedSeconds + elapsed);
 }
-export function startTimer(db: GTDDatabase, taskID: string, mode: TimerMode, now = new Date()): GTDDatabase {
+export interface StartTimerInput { workspaceID: string; taskID?: string | null; mode: TimerMode; targetMinutes?: number; title?: string }
+/** Target normalization matches the original: nearest whole minute, 1–180. */
+export function normalizePomodoroMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes)) throw new Error('Pomodoro target must be a finite number');
+  return Math.min(180, Math.max(1, Math.round(minutes)));
+}
+export function startTimerSession(db: GTDDatabase, input: StartTimerInput, now = new Date()): GTDDatabase {
   if (db.activeTimer) throw new Error('Stop the current timer before starting another');
-  if (mode !== 'stopwatch' && mode !== 'pomodoro') throw new Error('Invalid timer mode');
-  const task = lookup(db, taskID); if (task.status === 'done' || task.status === 'cancelled') throw new Error('Reopen this task before starting a timer');
-  const timestamp = instant(now);
-  return checked({ ...db, activeTimer: { mode, workspaceID: task.workspaceID, taskID: task.id, title: task.title, sessionStartedAt: timestamp, startedAt: timestamp, pausedAt: null, accumulatedSeconds: 0, targetSeconds: mode === 'pomodoro' ? 25 * 60 : null, phase: mode === 'pomodoro' ? 'focus' : null, focusCount: 0 } });
+  if (input.mode !== 'stopwatch' && input.mode !== 'pomodoro') throw new Error('Invalid timer mode');
+  const workspace = db.workspaces.find(w => sameID(w.id, input.workspaceID));
+  if (!workspace) throw new Error('Workspace was not found');
+  const task = input.taskID == null ? undefined : lookup(db, input.taskID);
+  if (task && !sameID(task.workspaceID, workspace.id)) throw new Error('Task belongs to another workspace');
+  if (task && (task.status === 'done' || task.status === 'cancelled')) throw new Error('Reopen this task before starting a timer');
+  const timestamp = instant(now), mode = input.mode;
+  return checked({ ...db, activeTimer: { mode, workspaceID: workspace.id, taskID: task?.id ?? null,
+    title: task?.title ?? (input.title?.trim() || '无任务专注'), sessionStartedAt: timestamp, startedAt: timestamp,
+    pausedAt: null, accumulatedSeconds: 0, targetSeconds: mode === 'pomodoro' ? normalizePomodoroMinutes(input.targetMinutes ?? 25) * 60 : null,
+    phase: mode === 'pomodoro' ? 'focus' : null, focusCount: 0 } });
+}
+/** Legacy callers retain their default 25-minute target and task association. */
+export function startTimer(db: GTDDatabase, taskID: string, mode: TimerMode, now = new Date()): GTDDatabase {
+  const task = lookup(db, taskID);
+  return startTimerSession(db, { workspaceID: task.workspaceID, taskID, mode }, now);
+}
+export function pomodoroClockState(targetSeconds: number, elapsed: number): { phase: 'remaining' | 'overtime'; seconds: number } {
+  if (!Number.isFinite(targetSeconds) || !Number.isFinite(elapsed) || targetSeconds < 0 || elapsed < 0) throw new Error('Invalid timer duration');
+  return elapsed < targetSeconds ? { phase: 'remaining', seconds: targetSeconds - elapsed } : { phase: 'overtime', seconds: elapsed - targetSeconds };
 }
 export function pauseTimer(db: GTDDatabase, now = new Date()): GTDDatabase {
   const timer = db.activeTimer; if (!timer || timer.pausedAt) return db;

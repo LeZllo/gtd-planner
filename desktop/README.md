@@ -24,7 +24,9 @@ Local timestamps, date precision, task UUIDs, parent/project/workspace relations
 
 ## Current scope and remaining work
 
-This slice focuses on task capture/tree/inspector, day and calendar projections, clear blue interaction states, reordering/reparenting, basic stopwatch/Pomodoro transitions, local persistence and safe JSON migration. Native OS integrations, complete original Gantt/actual-time editing, Obsidian import and full settings remain follow-on parity work. Timer parity still includes configurable 1–180-minute Pomodoro targets and the saved default, optional no-task sessions, and a visible overtime counter. Like the Swift baseline, timers continue beyond their target until explicitly stopped; the baseline has no automatic focus/break cycle to port.
+This slice includes task capture/tree/inspector, day and calendar projections, clear blue interaction states, reordering/reparenting, local persistence and safe JSON migration. Today now has a 00:00–24:00 planned/actual timeline, list mode, an unscheduled drawer, snapped interval selection and actual-record editing. Its actual lane can start optional-task Pomodoros with 1–180-minute targets; overtime is visible and stopping remains explicit. Read `docs/QA.md` for the exact automated and native checks completed so far.
+
+Full Gantt, complete project/tag/workspace managers, Obsidian import, native OS integrations and remaining preferences still need migration. The separate focus workspace and inspector retain their simpler timer-start controls; the saved global Pomodoro default and full focus-workspace layout remain follow-on parity work. The Swift baseline has no automatic focus/break cycle to port.
 
 The Swift baseline's Filters entry is already a placeholder, and its recurrence projection is DAILY-aware rather than a full RRULE engine. Custom filter authoring and full RRULE support are not required migration parity. The prototype preserves other recurrence expressions with a warning instead of claiming to execute them.
 
