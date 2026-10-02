@@ -29,7 +29,8 @@ struct CalendarPlanningTests {
         calendar.firstWeekday = 2
         let short = try #require(CalendarMonthGrid.make(containing: date(2021, 2, 1, calendar: calendar), calendar: calendar))
         #expect(short.days.count == 28)
-        #expect(short.days.allSatisfy(\.isInMonth))
+        let allDaysAreInMonth = short.days.allSatisfy { $0.isInMonth }
+        #expect(allDaysAreInMonth)
         calendar.firstWeekday = 1
         let long = try #require(CalendarMonthGrid.make(containing: date(2026, 8, 1, calendar: calendar), calendar: calendar))
         #expect(long.days.count == 42)
