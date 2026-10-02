@@ -53,6 +53,19 @@ struct PlanningHorizonTests {
         }
     }
 
+    @Test("Dragging from a missing spring-forward time preserves minutes and a positive duration")
+    func daylightSavingDragInMissingHour() {
+        let calendar = calendar("America/New_York")
+        let selection = TodayScheduleDragRules.selection(
+            lane: .plan, day: date(2026, 3, 8, calendar: calendar),
+            startY: 2.5 * 64, currentY: 3 * 64,
+            startHour: 0, endHour: 24, hourHeight: 64, fineSnap: false, calendar: calendar
+        )
+        #expect(selection.start == date(2026, 3, 8, 3, 30, calendar: calendar))
+        #expect(selection.end == date(2026, 3, 8, 4, calendar: calendar))
+        #expect(selection.duration == 30 * 60)
+    }
+
     @Test("Tomorrow includes ranges, slots, deadlines and daily tasks but not overdue-only backlog")
     func tomorrowMembership() {
         let fixture = Fixture()
@@ -240,6 +253,46 @@ struct PlanningHorizonTests {
         #expect(block.end == date(2026, 3, 8, 4, calendar: calendar))
         #expect(block.plannedDuration == 30 * 60)
         #expect(snapshot.days[0].drawerTasks.isEmpty)
+    }
+
+    @Test("Daily midnight templates stay on the requested day")
+    func dailyTemplateAtMidnight() throws {
+        let calendar = calendar("America/New_York")
+        let workspace = Workspace(name: "DST", symbolName: "calendar", colorHex: "#0A84FF")
+        var task = GTDTask(title: "Midnight", workspaceID: workspace.id, parentID: nil, status: .open)
+        task.recurrence = "FREQ=DAILY"
+        task.plannedStart = date(2026, 3, 7, calendar: calendar)
+        task.plannedEnd = date(2026, 3, 7, 0, 30, calendar: calendar)
+        task.plannedPrecision = .minute
+        let snapshot = PlanningHorizonProjection.make(
+            tasks: [task], timeEntries: [], horizon: .tomorrow, workspaceID: workspace.id,
+            now: date(2026, 3, 7, 12, calendar: calendar), calendar: calendar
+        )
+        let block = try #require(snapshot.days[0].planBlocks.first)
+        #expect(block.start == date(2026, 3, 8, calendar: calendar))
+        #expect(block.end == date(2026, 3, 8, 0, 30, calendar: calendar))
+        #expect(block.plannedDuration == 30 * 60)
+    }
+
+    @Test("Daily templates choose the first occurrence of a repeated fall-back time")
+    func dailyTemplateInRepeatedHour() throws {
+        let calendar = calendar("America/New_York")
+        let workspace = Workspace(name: "DST", symbolName: "calendar", colorHex: "#0A84FF")
+        var task = GTDTask(title: "Repeated hour", workspaceID: workspace.id, parentID: nil, status: .open)
+        task.recurrence = "FREQ=DAILY"
+        task.plannedStart = date(2026, 10, 31, 1, 30, calendar: calendar)
+        task.plannedEnd = date(2026, 10, 31, 1, 45, calendar: calendar)
+        task.plannedPrecision = .minute
+        let snapshot = PlanningHorizonProjection.make(
+            tasks: [task], timeEntries: [], horizon: .tomorrow, workspaceID: workspace.id,
+            now: date(2026, 10, 31, 12, calendar: calendar), calendar: calendar
+        )
+        let block = try #require(snapshot.days[0].planBlocks.first)
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        #expect(block.start == date(2026, 11, 1, 5, 30, calendar: utcCalendar))
+        #expect(block.end == date(2026, 11, 1, 5, 45, calendar: utcCalendar))
+        #expect(block.plannedDuration == 15 * 60)
     }
 
     @Test("Candidate lookups default to the calendar used to construct the projection")

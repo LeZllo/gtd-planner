@@ -66,6 +66,23 @@ struct TodayScheduleDragSelection: Identifiable, Equatable, Sendable {
     var duration: TimeInterval { end.timeIntervalSince(start) }
 }
 
+private enum TodayWallClockTime {
+    static func date(on day: Date, hour: Int, minute: Int, second: Int, calendar: Calendar) -> Date? {
+        let dayStart = calendar.startOfDay(for: day)
+        // bySettingHour downgrades the preserving policy to .nextTime. Use
+        // nextDate directly so a missing 02:30 becomes 03:30, not 03:00.
+        // Search before midnight because nextDate excludes its starting date.
+        guard let result = calendar.nextDate(
+            after: dayStart.addingTimeInterval(-1),
+            matching: DateComponents(hour: hour, minute: minute, second: second),
+            matchingPolicy: .nextTimePreservingSmallerComponents,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ), calendar.isDate(result, inSameDayAs: dayStart) else { return nil }
+        return result
+    }
+}
+
 enum TodayScheduleDragRules {
     static let standardSnapMinutes = 15
     static let fineSnapMinutes = 5
@@ -112,10 +129,8 @@ enum TodayScheduleDragRules {
             ?? dayStart.addingTimeInterval(24 * 3_600)
         func wallClockTime(for minute: Int) -> Date {
             if minute >= 24 * 60 { return dayEnd }
-            return calendar.date(
-                bySettingHour: minute / 60, minute: minute % 60, second: 0, of: dayStart,
-                matchingPolicy: .nextTimePreservingSmallerComponents,
-                repeatedTimePolicy: .first
+            return TodayWallClockTime.date(
+                on: dayStart, hour: minute / 60, minute: minute % 60, second: 0, calendar: calendar
             ) ?? dayStart
         }
         var start = wallClockTime(for: lower)
@@ -477,11 +492,9 @@ enum TodayExecutionProjection {
                 func shiftedTime(_ date: Date) -> Date? {
                     guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)) else { return nil }
                     let components = calendar.dateComponents([.hour, .minute, .second], from: date)
-                    return calendar.date(
-                        bySettingHour: components.hour ?? 0, minute: components.minute ?? 0,
-                        second: components.second ?? 0, of: day,
-                        matchingPolicy: .nextTimePreservingSmallerComponents,
-                        repeatedTimePolicy: .first
+                    return TodayWallClockTime.date(
+                        on: day, hour: components.hour ?? 0, minute: components.minute ?? 0,
+                        second: components.second ?? 0, calendar: calendar
                     )
                 }
                 displayedTask.plannedStart = shiftedTime(anchor)

@@ -116,12 +116,17 @@ struct PersistenceSafetyTests {
         defer { app.saveTask?.cancel() }
         #expect(app.selection.todayViewMode == .list)
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let originalDuration: TimeInterval = 32 * 60
+        let updatedDuration: TimeInterval = 40 * 60
         app.startPomodoro(for: nil, at: now)
-        #expect(app.activeTimer?.targetSeconds == 32 * 60)
+        let initialTarget = try #require(app.activeTimer?.targetSeconds)
+        #expect(initialTarget == originalDuration)
         preferences.defaultPomodoroMinutes = 40
-        #expect(app.activeTimer?.targetSeconds == 32 * 60)
+        let runningTarget = try #require(app.activeTimer?.targetSeconds)
+        #expect(runningTarget == originalDuration)
         _ = app.stopTimer(at: now.addingTimeInterval(60))
         app.startPomodoro(for: nil, at: now.addingTimeInterval(120))
-        #expect(app.activeTimer?.targetSeconds == 40 * 60)
+        let nextTarget = try #require(app.activeTimer?.targetSeconds)
+        #expect(nextTarget == updatedDuration)
     }
 }
