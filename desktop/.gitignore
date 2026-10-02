@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-electron/
+release/
+.qa-data/
+artifacts/
+*.log
+IMPLEMENTATION_CONTRACT.md

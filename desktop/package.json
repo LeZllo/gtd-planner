@@ -1,0 +1,33 @@
+{
+  "name": "gtd-planner-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first cross-platform GTD Planner prototype",
+  "license": "MIT",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && tsc -p tsconfig.electron.json && vite build",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "package:linux": "npm run build && electron-packager . GTDPlannerPreview --platform=linux --arch=x64 --out=release --overwrite --asar --ignore='^/(src|tests|docs|scripts|artifacts|\\.qa-data|IMPLEMENTATION_CONTRACT\\.md)(/|$)'",
+    "postinstall": "node node_modules/electron/install.js"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "electron": "44.5.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}
