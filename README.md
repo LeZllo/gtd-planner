@@ -131,7 +131,7 @@ README.en.md           English documentation
 
 - 当前仅支持 macOS 26 及以上版本。
 - 任务操作没有全局 Undo；删除后使用垃圾箱恢复，不应依赖 ⌘Z。设置和快捷键接线仍待原生焦点/多窗口验收。
-- 暂未提供 Developer ID 签名、公证和预编译下载包，使用者需要本地构建。构建脚本当前使用 Apple Silicon 的 `arm64-apple-macosx` 产物路径；Intel Mac 打包尚未验证。
+- 暂未提供 Developer ID 签名、公证和预编译下载包，使用者需要本地构建。构建脚本通过 `swift build --show-bin-path` 查询当前工具链的实际产物目录；Intel Mac 打包尚未验证。
 - 当前持久化、计时和日志服务仍由应用协调器统一管理，后续会继续拆分和完善。
 - 每日重复目前仅识别 `FREQ=DAILY`，结合开始日期、已完成实例和跳过实例投影；尚未实现完整 RRULE 语义（如 `INTERVAL`、`COUNT`、`UNTIL` 和其他频率）。
 - 跨日专注统计不修改原始记录。暂停计时只存储总 `activeSeconds`，没有暂停分段，因此各日有效时长按墙钟交集比例估算。

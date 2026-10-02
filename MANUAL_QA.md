@@ -6,7 +6,7 @@
 
 ## 1. 环境与构建
 
-- [ ] **记录环境。** macOS 26（Tahoe）或更高、Swift 6.2 兼容工具链。优先 Apple Silicon：当前脚本使用 `arm64-apple-macosx` 产物路径，Intel 打包未验证；如架构不符先反馈，不把找不到二进制误判成页面问题。
+- [ ] **记录环境。** macOS 26（Tahoe）或更高、Swift 6.2 兼容工具链。优先 Apple Silicon；脚本通过 `swift build --show-bin-path` 查询实际产物目录，Intel 打包仍未验证。记录工具链和架构，不把找不到二进制误判成页面问题。
 - [ ] **核对代码。** 在双方确认的 checkout 中记录 `git status --short`、分支和 commit。不要为了拉取强制丢弃自己的修改；未确认远程版本前不要只测试旧 app。
 
 在项目根目录逐条运行并保留输出：

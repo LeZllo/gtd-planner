@@ -131,7 +131,7 @@ The project does not bundle custom fonts, icon files, or third-party icon librar
 
 - macOS 26 or later is currently required.
 - Task mutations do not have global Undo; recover deleted tasks through Trash rather than relying on ⌘Z. Native focus and multi-window behavior for settings and shortcuts is still unverified.
-- No Developer ID-signed, notarized, or prebuilt download package is provided yet. The build script currently expects an Apple Silicon `arm64-apple-macosx` output path; Intel Mac packaging is unverified.
+- No Developer ID-signed, notarized, or prebuilt download package is provided yet. The build script uses `swift build --show-bin-path` to locate the current toolchain's output directory; Intel Mac packaging is unverified.
 - Persistence, timer, and logging services are still coordinated by the application model and will be further separated and refined.
 - Daily recurrence currently recognizes only `FREQ=DAILY`, using a start date and completed/skipped instance dates. Full RRULE semantics, including `INTERVAL`, `COUNT`, `UNTIL`, and other frequencies, are not implemented.
 - Cross-day focus statistics leave canonical records unchanged. Paused sessions retain only total `activeSeconds`, not pause segments, so active time per day is estimated in proportion to the intersecting wall-clock duration.
