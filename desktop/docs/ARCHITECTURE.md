@@ -2,7 +2,7 @@
 
 ## Decision and scope
 
-This local prototype starts from published Swift commit `39e02786fed76670f484f2e41074cb5680a257bc` on independent branch `migration/electron-prototype`. Existing Swift files and SwiftData stores remain untouched. No push, release, signing, account service, synchronization or subscription system is included.
+This prototype starts from published Swift commit `39e02786fed76670f484f2e41074cb5680a257bc`, with initial development on independent branch `migration/electron-prototype`. The first preview snapshot was published as commit `41bd3ace7f644f6ecbbe97d952a41ac709ac211b` on remote branch `test/electron-prototype-2026-10-02`. Existing Swift files and SwiftData stores remain untouched. This preview is not a signed public release; no account service, synchronization or subscription system is included.
 
 Electron + TypeScript + React was selected for shared desktop logic/UI and directly observable browser interaction tests. The known Swift hot spots were full-tree/descendant reconstruction on drag samples, a 28–42-day sidebar calendar projection, and animated catch-up during direct manipulation. Rewriting those patterns in C++ alone would not remove their algorithmic cost. Qt 6 + QML/C++ remains viable but requires an additional SDK/toolchain and a different UI automation approach here. It does not guarantee smoothness without the same indexing, model notification and drawing discipline. No unsupported performance or package-size numbers are claimed.
 
@@ -33,6 +33,8 @@ Malformed references/cycles, unsupported newer schemas and corrupt files must no
 2. Port and verify the full Swift behavioral specification: daily/cross-day completion, scheduling/actual lanes, project sections and full Gantt, tag management, Obsidian conversion, trash/log parity and complete settings
 3. Stress/performance work: 1k/10k synthetic tasks, repeat navigation and drag, record wall-clock/profile evidence on a named machine; caching/invalidation must respect exact deadline crossings, midnight, timezone and DST
 4. Platform release gates: Linux packaging and runtime QA, macOS and Windows build/installer/smoke matrix, keyboard/menu and DPI/accessibility review, signing/notarization through authorized credentials
+
+Parity is bounded by the Swift baseline. Its Pomodoro timer intentionally continues into overtime until manual stop; there is no automatic focus/break cycle to port. Remaining timer parity includes configurable 1–180-minute targets and the saved default, optional no-task sessions, and visible overtime. Filters is already a placeholder, and `TodayExecutionServices` recognizes DAILY recurrence rather than implementing full RRULE semantics. Custom filter authoring and a full RRULE engine are outside required migration parity; preserving recurrence data does not imply executing every expression.
 
 The existing 189 Swift tests are specifications to port, not tests passed by this prototype. Linux/browser success cannot establish macOS/Windows installer behavior, code signing or notarization.
 

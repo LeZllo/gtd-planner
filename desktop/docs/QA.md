@@ -7,7 +7,8 @@ Date: 2026-10-02. All records are synthetic and use a dedicated preview data dir
 - 31 domain cases: model validation, UUID/reference/cycle safety, unknown extension preservation, legacy defaults and schema rejection, JSON roundtrip, local civil-day and DST boundaries, daily completion/skipping, tree moves, duplicate semantics, timer pause/resume/stop, recoverable trash, deep hierarchies
 - 9 desktop storage cases: empty first launch, serialized newest-wins writes, invalid-write refusal, corrupt-primary recovery, unrecoverable-data refusal, active-timer reopen, missing-primary backup recovery
 - 2 browser-adapter cases: corrupt-primary backup preservation and missing-primary recovery
-- Current total: 42 tests passed
+- 6 actual-focus projection regressions: workspace identity, half-open midnight, paused cross-day proration, zero/null active seconds, local timezone and DST
+- Current total: 48 tests passed
 - Renderer and Electron TypeScript checks plus full production Vite build passed
 - npm audit after updating packaging dependencies: 0 reported vulnerabilities (this is not a guarantee of absence of vulnerabilities)
 
@@ -51,3 +52,13 @@ Date: 2026-10-02. All records are synthetic and use a dedicated preview data dir
 
 - Final safety gate: data replacement has a separate IPC method and permanent timestamped `Backups/before-import-*` snapshot; ordinary later saves cannot rotate it away. Tests verify snapshot retention and active-timer refusal before replacement.
 - Final packaged-binary check: import-specific IPC completed on the native desktop and created a separate timestamped pre-import file containing all 1,000 prior tasks; current data also validated at 1,000 tasks afterward
+
+
+## Actual-focus statistics hotfix after first published preview
+
+Base: `41bd3ace7f644f6ecbbe97d952a41ac709ac211b`. Corrected the overview to count only the selected workspace and the selected local day's overlap. Timers with stored active seconds are prorated across their full wall-clock span, as in the Swift baseline; the UI explains that cross-day pause attribution is estimated. The original entries are not rewritten.
+
+- All 48 tests and the production build passed
+- Real compiled Electron window on cloud Linux, sandbox enabled, isolated synthetic database and process timezone UTC: Work A shows 30 minutes on October 2 and 15 minutes on October 1 for a 45-active-minute session crossing midnight; Work B shows only its own 90 minutes on October 2
+- Verified the Today page after switching workspaces and the Calendar overview after selecting the previous day; no aggregate from the other workspace leaked into either total
+- Scope documentation corrected: Filters were already a Swift placeholder; automatic Pomodoro break cycles and a full RRULE engine are not baseline parity requirements
