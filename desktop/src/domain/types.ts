@@ -11,6 +11,17 @@ export interface ProjectSection extends Preserved { id: string; projectID: strin
 export interface TagCategory extends ProjectCategory { createdAt: string; updatedAt: string }
 export interface TaskTagDefinition extends TagCategory { categoryID?: string | null; note: string }
 export interface ExecutionSlot extends Preserved { id: string; start: string; end: string }
+export interface TaskPlan {
+  plannedStart?: string | null; plannedEnd?: string | null;
+  plannedPrecision: DatePrecision; planRangeIntent: 'progress' | 'complete-within';
+}
+/** Additive Electron extension. Legacy plan/slot strings are never migrated on read. */
+export interface TaskSchedule extends Preserved {
+  version: 1;
+  startsOn?: string; endsBefore?: string;
+  exceptions: Array<{ day: string; plan: TaskPlan }>;
+  revisions: Array<{ fromDay: string; plan: TaskPlan }>;
+}
 export interface GTDTask extends Preserved {
   id: string; title: string; workspaceID: string; projectID?: string | null; sectionID?: string | null; parentID?: string | null;
   status: TaskStatus; priority: Priority; actionList: 'next-action' | 'waiting' | 'someday-maybe';
@@ -19,6 +30,7 @@ export interface GTDTask extends Preserved {
   deadline?: string | null; deadlinePrecision: DatePrecision; recurrence: string; note: string;
   createdAt: string; updatedAt: string; completedAt?: string | null; order: number;
   completedInstances: string[]; skippedInstances: string[];
+  taskSchedule?: TaskSchedule;
 }
 export interface TimeEntry extends Preserved {
   id: string; workspaceID: string; taskID?: string | null; title: string; startedAt: string; endedAt: string;

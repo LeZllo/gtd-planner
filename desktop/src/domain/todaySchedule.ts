@@ -2,6 +2,8 @@ import type { GTDDatabase, GTDTask, TimeEntry } from './types.js';
 import { canScheduleTaskOnDay, dateDay, dayBounds, dayKey, deadlineInstant, isMultiDayPlan, isTaskCompletedOnDay, isISO, localDate, supportsDailyRecurrence, taskPlanIntersectsDay, wallClockTime } from './dates.js';
 import { completeTask, tasksForDay, updateTask } from './operations.js';
 import { actualFocusForDay, clipTimeEntryToDay } from './timeEntries.js';
+import { effectiveTaskPlan, isConcretePlan, needsReschedule, resolveTaskArrangements } from './scheduling.js';
+import { removeTaskArrangement, saveTaskArrangement } from './scheduleCommands.js';
 import { idKey, sameID } from './validation.js';
 
 export interface TodayPlanBlock {
@@ -11,38 +13,24 @@ export interface TodayPlanBlock {
 export interface TodayActualBlock { id: string; entry: TimeEntry; start: string; end: string; actualDuration: number; estimated: boolean }
 export interface TodayScheduleSnapshot {
   day: string; dayStart: string; dayEnd: string; tasks: GTDTask[]; completedTasks: GTDTask[];
-  drawerTasks: GTDTask[]; crossDayProgressTasks: GTDTask[]; completeWithinTasks: GTDTask[];
+  drawerTasks: GTDTask[]; rescheduleTasks: GTDTask[]; crossDayProgressTasks: GTDTask[]; completeWithinTasks: GTDTask[];
   overdueTasks: GTDTask[]; deadlineTasks: GTDTask[]; planBlocks: TodayPlanBlock[];
   actualEntries: TimeEntry[]; actualBlocks: TodayActualBlock[]; totalCount: number; completedCount: number;
   remainingCount: number; waitingCount: number; overdueCount: number; plannedDuration: number;
   actualDuration: number; actualEstimated: boolean;
 }
 const iso = (time: number) => new Date(time).toISOString();
-function shiftedTemplate(task: GTDTask, day: string): GTDTask {
-  if (task.plannedPrecision !== 'minute' || !supportsDailyRecurrence(task) || isMultiDayPlan(task) || !task.plannedStart) return task;
-  const anchor = localDate(task.plannedStart), originalDay = dateDay(task.plannedStart);
-  if (day < originalDay) return task;
-  // Calendar-day arithmetic, not fixed 24-hour additions, preserves clock time.
-  const ordinal = (key: string) => { const d = localDate(key); const utc = new Date(0); utc.setUTCFullYear(d.getFullYear(), d.getMonth(), d.getDate()); utc.setUTCHours(0, 0, 0, 0); return utc.getTime() / 86_400_000; };
-  const offset = ordinal(day) - ordinal(originalDay);
-  const shift = (value: string) => { const source = localDate(value), target = localDate(dateDay(value)); target.setDate(target.getDate() + offset); return wallClockTime(dayKey(target), source.getHours() * 60 + source.getMinutes() + source.getSeconds() / 60 + source.getMilliseconds() / 60_000).getTime(); };
-  const start = shift(task.plannedStart); let end = task.plannedEnd ? shift(task.plannedEnd) : null;
-  if (end !== null && end <= start && task.plannedEnd && localDate(task.plannedEnd).getTime() > anchor.getTime()) end = start + localDate(task.plannedEnd).getTime() - anchor.getTime();
-  return { ...task, plannedStart: iso(start), plannedEnd: end === null ? null : iso(end) };
-}
 export function planBlocksForDay(task: GTDTask, day: string): TodayPlanBlock[] {
   const [dayStart, dayEnd] = dayBounds(day), blocks: TodayPlanBlock[] = [];
-  for (const slot of task.executionSlots) {
-    const start = Math.max(Date.parse(slot.start), dayStart), end = Math.min(Date.parse(slot.end), dayEnd);
-    if (end > start) blocks.push({ id: `${task.id}:slot:${slot.id}`, source: 'executionSlot', slotID: slot.id, taskID: task.id, title: task.title, start: iso(start), end: iso(end), plannedDuration: (end - start) / 1000, isPoint: false });
-  }
-  const displayed = shiftedTemplate(task, day);
-  if (displayed.plannedPrecision === 'minute' && !isMultiDayPlan(displayed) && displayed.plannedStart && taskPlanIntersectsDay(displayed, day)) {
-    const start = Math.max(localDate(displayed.plannedStart).getTime(), dayStart);
-    const explicitEnd = displayed.plannedEnd ? Math.min(localDate(displayed.plannedEnd).getTime(), dayEnd) : null;
+  for (const item of resolveTaskArrangements(task, day)) {
+    const plan = item.plan;
+    if (item.source === 'taskPlan' && !isConcretePlan(plan)) continue;
+    if (!taskPlanIntersectsDay(plan, day)) continue;
+    const start = Math.max(localDate(plan.plannedStart!).getTime(), dayStart);
+    const explicitEnd = plan.plannedEnd ? Math.min(localDate(plan.plannedEnd).getTime(), dayEnd) : null;
     const isPoint = explicitEnd === null || explicitEnd === start;
     const end = isPoint ? Math.min(start + 1800_000, dayEnd) : explicitEnd!;
-    blocks.push({ id: `${task.id}:plan`, source: 'taskPlan', taskID: task.id, title: task.title, start: iso(start), end: iso(end), plannedDuration: isPoint ? 0 : Math.max(0, (end - start) / 1000), isPoint });
+    blocks.push({ id: item.id, source: item.source, slotID: item.slotID, taskID: task.id, title: task.title, start: iso(start), end: iso(end), plannedDuration: isPoint ? 0 : Math.max(0, (end - start) / 1000), isPoint });
   }
   return blocks;
 }
@@ -55,9 +43,11 @@ export function todayScheduleSnapshot(db: GTDDatabase, workspaceID: string, day:
   const unfinished = tasks.filter(t => !isTaskCompletedOnDay(t, day) && t.status !== 'done' && t.status !== 'cancelled');
   const planBlocks = tasks.flatMap(task => planBlocksForDay(task, day)).sort((a, b) => Date.parse(a.start) - Date.parse(b.start) || a.title.localeCompare(b.title));
   const scheduled = new Set(planBlocks.map(b => idKey(b.taskID)));
-  const drawerTasks = unfinished.filter(t => !scheduled.has(idKey(t.id)));
-  const crossDayProgressTasks = unfinished.filter(t => isMultiDayPlan(t) && t.planRangeIntent === 'progress' && taskPlanIntersectsDay(t, day));
-  const completeWithinTasks = unfinished.filter(t => isMultiDayPlan(t) && t.planRangeIntent === 'complete-within' && taskPlanIntersectsDay(t, day));
+  const rescheduleTasks = unfinished.filter(t => needsReschedule(t, day, now));
+  const rescheduleIDs = new Set(rescheduleTasks.map(t => idKey(t.id)));
+  const drawerTasks = unfinished.filter(t => !scheduled.has(idKey(t.id)) || rescheduleIDs.has(idKey(t.id)));
+  const crossDayProgressTasks = unfinished.filter(t => isMultiDayPlan(effectiveTaskPlan(t, day)) && effectiveTaskPlan(t, day).planRangeIntent === 'progress' && taskPlanIntersectsDay(effectiveTaskPlan(t, day), day));
+  const completeWithinTasks = unfinished.filter(t => isMultiDayPlan(effectiveTaskPlan(t, day)) && effectiveTaskPlan(t, day).planRangeIntent === 'complete-within' && taskPlanIntersectsDay(effectiveTaskPlan(t, day), day));
   const overdueTasks = unfinished.filter(overdue);
   const deadlineTasks = unfinished.filter(t => !!t.deadline && dateDay(t.deadline) === day);
   const actualBlocks: TodayActualBlock[] = [];
@@ -68,7 +58,7 @@ export function todayScheduleSnapshot(db: GTDDatabase, workspaceID: string, day:
   }
   actualBlocks.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const focus = actualFocusForDay(db.timeEntries, workspaceID, day);
-  return { day, dayStart: iso(start), dayEnd: iso(end), tasks, completedTasks, drawerTasks, crossDayProgressTasks, completeWithinTasks, overdueTasks, deadlineTasks,
+  return { day, dayStart: iso(start), dayEnd: iso(end), tasks, completedTasks, drawerTasks, rescheduleTasks, crossDayProgressTasks, completeWithinTasks, overdueTasks, deadlineTasks,
     planBlocks, actualEntries: actualBlocks.map(b => b.entry), actualBlocks, totalCount: tasks.length, completedCount: completedTasks.length,
     remainingCount: tasks.length - completedTasks.length, waitingCount: drawerTasks.length, overdueCount: overdueTasks.length,
     plannedDuration: planBlocks.reduce((total, b) => total + b.plannedDuration, 0), actualDuration: focus.seconds, actualEstimated: focus.estimated };
@@ -100,27 +90,15 @@ function workspaceTask(db: GTDDatabase, workspaceID: string, taskID: string): GT
 }
 export interface AddExecutionSlotInput { workspaceID: string; taskID: string; start: string; end: string }
 export function addExecutionSlot(db: GTDDatabase, input: AddExecutionSlotInput, now = new Date()): GTDDatabase {
-  const task = workspaceTask(db, input.workspaceID, input.taskID), start = Date.parse(input.start), end = Date.parse(input.end);
   if (!isISO(input.start) || !isISO(input.end)) throw new Error('Execution times require ISO timestamps with a timezone');
-  if (end <= start) throw new Error('Execution end must be after start');
-  if (task.status === 'done' || task.status === 'cancelled') throw new Error('Finished tasks cannot be scheduled');
-  // Every occupied local day must be schedulable; an exclusive midnight end
-  // does not accidentally validate (or reject) the next daily occurrence.
-  if (supportsDailyRecurrence(task)) {
-    let cursor = dayBounds(dayKey(new Date(start)))[0];
-    while (cursor < end) {
-      const key = dayKey(new Date(cursor));
-      if (!canScheduleTaskOnDay(task, key)) throw new Error('This daily occurrence is completed, skipped, or before the recurrence starts');
-      const next = dayBounds(key)[1]; if (next <= cursor) throw new Error('Unable to advance the local day'); cursor = next;
-    }
-  }
-  if (task.executionSlots.some(s => Date.parse(s.start) === start && Date.parse(s.end) === end)) return db;
-  const executionSlots = [...task.executionSlots, { id: crypto.randomUUID(), start: input.start, end: input.end }].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
-  return updateTask(db, task.id, { executionSlots }, now);
+  if (Date.parse(input.end) <= Date.parse(input.start)) throw new Error('Execution end must be after start');
+  return saveTaskArrangement(db, { ...input, day: dateDay(input.start), ref: 'additional', plan: { plannedStart: input.start, plannedEnd: input.end, plannedPrecision: 'minute', planRangeIntent: 'progress' } }, now);
 }
 export function removeExecutionSlot(db: GTDDatabase, workspaceID: string, taskID: string, slotID: string): GTDDatabase {
-  const task = workspaceTask(db, workspaceID, taskID), executionSlots = task.executionSlots.filter(s => !sameID(s.id, slotID));
-  return executionSlots.length === task.executionSlots.length ? db : updateTask(db, task.id, { executionSlots });
+  const task = workspaceTask(db, workspaceID, taskID), slot = task.executionSlots.find(s => sameID(s.id, slotID));
+  if (!slot) return db;
+  const day = dateDay(slot.start), alias = resolveTaskArrangements(task, day).find(item => item.linkedSlotIDs.some(id => sameID(id, slotID)));
+  return removeTaskArrangement(db, { workspaceID, taskID, day, ref: alias ? { source: 'taskPlan' } : { source: 'executionSlot', slotID }, scope: supportsDailyRecurrence(task) ? 'occurrence' : undefined });
 }
 /** Explicit desired state is retry-safe, unlike a blind toggle. Historical
  * nonrecurring changes and all future completion remain disallowed. */

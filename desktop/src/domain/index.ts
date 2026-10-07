@@ -5,3 +5,5 @@ export * from './operations.js';
 export * from './fixtures.js';
 export * from './timeEntries.js';
 export * from './todaySchedule.js';
+export * from './scheduling.js';
+export * from './scheduleCommands.js';

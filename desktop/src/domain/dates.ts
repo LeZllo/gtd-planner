@@ -1,4 +1,4 @@
-import type { GTDTask } from './types.js';
+import type { GTDTask, TaskPlan } from './types.js';
 
 export function dayKey(date: Date): string {
   if (!Number.isFinite(date.getTime())) throw new Error('Invalid date');
@@ -39,8 +39,14 @@ export function isDailyRecurring(task: GTDTask): boolean {
 }
 /** Only plain daily recurrence is projected. Keep other RRULEs without faking support. */
 export function supportsDailyRecurrence(task: GTDTask): boolean {
+  if (!task.recurrence) return false;
   const parts = task.recurrence.trim().toUpperCase().replace(/^RRULE:/, '').split(';').filter(Boolean).map(p => p.trim());
   return parts.includes('FREQ=DAILY') && parts.every(p => p === 'FREQ=DAILY' || p === 'INTERVAL=1');
+}
+export function dailyTemplateActive(task: GTDTask, day: string): boolean {
+  return supportsDailyRecurrence(task) && (!task.taskSchedule?.startsOn || day >= task.taskSchedule.startsOn)
+    && (!task.taskSchedule?.endsBefore || day < task.taskSchedule.endsBefore)
+    && (!task.plannedStart || day >= dateDay(task.plannedStart));
 }
 
 /** Date-only deadlines expire after their entire local civil day. */
@@ -59,13 +65,13 @@ export function canScheduleTaskOnDay(task: GTDTask, day: string): boolean {
   return !task.completedInstances.includes(day) && !task.skippedInstances.includes(day)
     && (!task.plannedStart || dateDay(task.plannedStart) <= day);
 }
-export function taskPlanIntersectsDay(task: GTDTask, day: string): boolean {
+export function taskPlanIntersectsDay(task: TaskPlan, day: string): boolean {
   if (!task.plannedStart) return false;
   if (task.plannedPrecision === 'date') return dateDay(task.plannedStart) <= day && day <= dateDay(task.plannedEnd ?? task.plannedStart);
   const [start, end] = dayBounds(day), a = localDate(task.plannedStart).getTime(), b = task.plannedEnd ? localDate(task.plannedEnd).getTime() : a;
   return b > a ? a < end && b > start : a >= start && a < end;
 }
-export function isMultiDayPlan(task: GTDTask): boolean {
+export function isMultiDayPlan(task: TaskPlan): boolean {
   if (!task.plannedStart || !task.plannedEnd) return false;
   if (task.plannedPrecision === 'date') return dateDay(task.plannedStart) < dateDay(task.plannedEnd);
   return localDate(task.plannedEnd).getTime() > dayBounds(dateDay(task.plannedStart))[1];

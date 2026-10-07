@@ -33,3 +33,16 @@ test('actual-time category keeps its independent green styling', () => {
   assert.equal(actual['border-left-color'], '#66a28c');
   assert.equal(actual.color, '#397b68');
 });
+
+test('refined selection uses shared tokens in light and dark modes', () => {
+  assert.match(baseCSS, /\.task-row.selected,\.today-task-row.selected\{background:var\(--selection-bg\)/);
+  assert.match(baseCSS, /:root\[data-theme="dark"\] \.task-row.selected\{background:var\(--selection-bg\)/);
+  assert.match(baseCSS, /:root\{color:var\(--text\);background:var\(--canvas\)\}/);
+  assert.match(todayCSS, /\.today-timeline-card\.compact-card\{[^}]*flex-direction:row/);
+});
+test('small key text and primary control labels meet 4.5:1 contrast; completion glyphs meet 3:1', () => {
+  const luminance=(hex:string)=>hex.match(/../g)!.map(c=>parseInt(c,16)/255).map(c=>c<=.04045?c/12.92:((c+.055)/1.055)**2.4).reduce((n,c,i)=>n+c*[.2126,.7152,.0722][i],0);
+  const contrast=(a:string,b:string)=>{const [lo,hi]=[luminance(a),luminance(b)].sort((a,b)=>a-b);return(hi+.05)/(lo+.05);};
+  for(const [fg,bg] of [['596b83','ffffff'],['2155ad','edf3ff'],['ffffff','245fe3'],['508afa','1e2531'],['101a2c','508afa'],['c7ddff','223b62']])assert.ok(contrast(fg,bg)>=4.5,`${fg} on ${bg}`);
+  assert.ok(contrast('ffffff','508afa')>=3);
+});

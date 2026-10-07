@@ -1,5 +1,6 @@
+import { effectiveTaskPlan, needsReschedule } from './scheduling.js';
 import type { GTDDatabase, GTDTask, ActiveTimer, TimerMode, TrashItem } from './types.js';
-import { dayKey, dateDay, dayBounds, localDate, supportsDailyRecurrence, isDayKey, deadlineInstant } from './dates.js';
+import { dailyTemplateActive, taskPlanIntersectsDay, dayKey, dateDay, dayBounds, localDate, supportsDailyRecurrence, isDayKey, deadlineInstant } from './dates.js';
 import { idKey, sameID, validateDatabase } from './validation.js';
 
 const uuid = () => crypto.randomUUID();
@@ -83,13 +84,19 @@ export function tasksForDay(db: GTDDatabase, workspaceID: string, day: string, n
     if (daily && task.completedInstances.includes(day)) return true;
     if (!daily && task.status === 'done') return !!task.completedAt && dateDay(task.completedAt) === day;
     if (task.status === 'done') return false;
-    if (daily) return !task.skippedInstances.includes(day) && (!task.plannedStart || dateDay(task.plannedStart) <= day);
+    if (daily && task.skippedInstances.includes(day)) return false;
+    if (daily && dailyTemplateActive(task, day)) return true;
+    if (daily) {
+      if (taskPlanIntersectsDay(effectiveTaskPlan(task, day), day) || task.executionSlots.some(slot => overlaps(slot.start, slot.end))) return true;
+      return !!task.deadline && (dateDay(task.deadline) === day || (day === today && deadlineInstant(task)! < now.getTime()));
+    }
     // Date-only end is an inclusive civil day; minute ranges are half-open.
     if (task.plannedStart) {
       if (task.plannedPrecision === 'date') { if (dateDay(task.plannedStart) <= day && day <= dateDay(task.plannedEnd ?? task.plannedStart)) return true; }
       else if (overlaps(task.plannedStart, task.plannedEnd)) return true;
     }
     if (task.executionSlots.some(slot => overlaps(slot.start, slot.end))) return true;
+    if (needsReschedule(task, day, now)) return true;
     if (task.deadline) return dateDay(task.deadline) === day || (day === today && deadlineInstant(task)! < now.getTime());
     return false;
   }));
@@ -116,6 +123,12 @@ export function completeTask(db: GTDDatabase, id: string, day?: string, now = ne
     if (task.completedInstances.includes(token)) return db;
     if (task.skippedInstances.includes(token)) throw new Error('This occurrence was skipped');
     if (task.plannedStart && token < dateDay(task.plannedStart)) throw new Error('This occurrence is before the recurrence starts');
+    if (!dailyTemplateActive(task, token)) {
+      const [start, end] = dayBounds(token);
+      const explicitlyArranged = taskPlanIntersectsDay(effectiveTaskPlan(task, token), token)
+        || task.executionSlots.some(slot => Date.parse(slot.start) < end && Date.parse(slot.end) > start);
+      if (!explicitlyArranged) throw new Error('此日的重复模板尚未开始或已停止，没有可完成的实例');
+    }
     return updateTask(db, id, { completedInstances: [...task.completedInstances, token] }, now);
   }
   if (task.recurrence.trim()) throw new Error('Completing this recurrence is not supported. Its rule has been preserved.');

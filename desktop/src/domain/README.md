@@ -47,3 +47,7 @@ Remaining parity includes full category/label management and all original planne
 - `setTaskCompletionForDay` takes the desired state, so retries are idempotent. Future completion and historical nonrecurring completion/reopening remain forbidden; daily completion never finishes the series. Dated commands recheck current day membership at commit time, so stale removed/moved plans, unrelated undated tasks and other-day completions cannot be changed through a retained Today row.
 
 `node --import tsx --test tests/today-schedule.test.ts` covers snapshot membership/categories, DST gap/fold, midnight/points, immutable and idempotent commands, workspace/daily guards, actual conflicts and metadata/range edits, optional-task targets/overtime, and date-scoped completion safety.
+
+## Unified arrangements and scoped daily edits
+
+`resolveTaskArrangements` is the shared read model for legacy root plans and execution slots. `saveTaskArrangement`, `removeTaskArrangement`, `setTaskDeadline` and `setDailyRecurrence` are workspace-scoped finite commands. Equal-instant root-plan/slot aliases are projected once without a read-time migration; independent overlaps remain distinct. `taskSchedule.version=1` adds explicit occurrence exceptions, effective-dated template revisions and prospective daily start/stop boundaries while retaining the original template/history. See `docs/TIME-CONVERGENCE-2026-10-03.md` for compatibility, timezone, undo and regression coverage.

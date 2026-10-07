@@ -1,5 +1,6 @@
-import type { GTDDatabase, GTDTask, ActiveTimer, Preserved } from './types.js';
-import { isDayKey, isISO, localDate, supportsDailyRecurrence } from './dates.js';
+import type { GTDDatabase, GTDTask, ActiveTimer, Preserved, TaskPlan } from './types.js';
+import { dateDay, isMultiDayPlan, isDayKey, isISO, localDate, supportsDailyRecurrence } from './dates.js';
+import { arrangementWarnings } from './scheduling.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const own = (o: Preserved, k: string) => Object.prototype.hasOwnProperty.call(o, k);
@@ -30,6 +31,35 @@ function entity(v: unknown, p: string, version: number, warnings: Set<string>): 
   uuid(o.id, `${p}.id`); return o;
 }
 const statusValues = ['inbox', 'open', 'in-progress', 'waiting', 'someday', 'done', 'cancelled'];
+function schedulePlan(v: unknown, p: string) {
+  const plan = record(v, p);
+  choice(plan.plannedPrecision, ['none', 'date', 'minute'], `${p}.plannedPrecision`);
+  choice(plan.planRangeIntent, ['progress', 'complete-within'], `${p}.planRangeIntent`);
+  for (const key of ['plannedStart', 'plannedEnd']) optional(plan, key, (value, path) => date(value, path, plan.plannedPrecision === 'date'), p);
+  if ((plan.plannedPrecision === 'none') !== !plan.plannedStart) fail(p, 'plan precision and start disagree');
+  if (plan.plannedEnd && !plan.plannedStart) fail(p, 'planned end needs a planned start');
+  const comparable = plan.plannedPrecision !== 'date' || isDayKey(plan.plannedStart) === isDayKey(plan.plannedEnd);
+  if (comparable && plan.plannedStart && plan.plannedEnd && localDate(plan.plannedEnd as string) < localDate(plan.plannedStart as string)) fail(p, 'planned end is before start');
+}
+function schedule(v: unknown, p: string) {
+  const value = record(v, p);
+  if (value.version !== 1) fail(p, 'unsupported task schedule extension version');
+  for (const field of ['startsOn', 'endsBefore']) if (value[field] !== undefined && !isDayKey(value[field])) fail(p, 'invalid recurrence boundary');
+  if (value.startsOn && value.endsBefore && String(value.endsBefore) < String(value.startsOn)) fail(p, 'recurrence ends before its start');
+  for (const [field, dateField] of [['exceptions', 'day'], ['revisions', 'fromDay']] as const) {
+    const seen = new Set<string>();
+    for (const [i, item] of array(value[field], `${p}.${field}`).entries()) {
+      const path = `${p}.${field}[${i}]`, row = record(item, path), day = row[dateField];
+      if (!isDayKey(day) || seen.has(day)) fail(path, 'expected a unique local civil day');
+      seen.add(day); schedulePlan(row.plan, `${path}.plan`);
+      const plan = row.plan as unknown as TaskPlan;
+      if (plan.plannedPrecision === 'date' && isDayKey(plan.plannedStart) && isDayKey(plan.plannedEnd) && isMultiDayPlan(plan)) fail(path, 'scoped daily civil plan cannot be a multi-day window');
+      // Civil values have unambiguous day identity. Imported minute instants may
+      // have crossed a date boundary after a device timezone change; preserve.
+      if (plan.plannedPrecision === 'date' && plan.plannedStart && isDayKey(plan.plannedStart) && plan.plannedStart !== day) fail(path, 'scoped civil plan must start on its occurrence/effective day');
+    }
+  }
+}
 function task(v: unknown, p: string, version: number, warnings: Set<string>): GTDTask {
   const o = entity(v, p, version, warnings); str(o.title, `${p}.title`); uuid(o.workspaceID, `${p}.workspaceID`);
   for (const k of ['projectID', 'sectionID', 'parentID']) optional(o, k, uuid, p);
@@ -43,6 +73,7 @@ function task(v: unknown, p: string, version: number, warnings: Set<string>): GT
   for (const k of ['plannedStart', 'plannedEnd']) optional(o, k, (v, p) => date(v, p, o.plannedPrecision === 'date'), p);
   optional(o, 'deadline', (v, p) => date(v, p, o.deadlinePrecision === 'date'), p);
   optional(o, 'order', (v, p) => num(v, p, true), p);
+  optional(o, 'taskSchedule', schedule, p);
   const tags = strings(o, 'tags', p), contexts = strings(o, 'contexts', p);
   const completedInstances = strings(o, 'completedInstances', p), skippedInstances = strings(o, 'skippedInstances', p);
   for (const [field, days] of [['completedInstances', completedInstances], ['skippedInstances', skippedInstances]] as const) {
@@ -58,7 +89,8 @@ function task(v: unknown, p: string, version: number, warnings: Set<string>): GT
   });
   unique(executionSlots, `${p}.executionSlots`);
   if (o.plannedEnd && !o.plannedStart) fail(p, 'planned end needs a planned start');
-  if (o.plannedStart && o.plannedEnd && localDate(o.plannedEnd as string) < localDate(o.plannedStart as string)) fail(p, 'planned end is before start');
+  const comparable = o.plannedPrecision !== 'date' || isDayKey(o.plannedStart) === isDayKey(o.plannedEnd);
+  if (comparable && o.plannedStart && o.plannedEnd && localDate(o.plannedEnd as string) < localDate(o.plannedStart as string)) fail(p, 'planned end is before start');
   if (o.plannedPrecision && o.plannedPrecision !== 'none' && !o.plannedStart) fail(p, 'planned precision needs a planned start');
   if (o.deadlinePrecision && o.deadlinePrecision !== 'none' && !o.deadline) fail(p, 'deadline precision needs a deadline');
   const status = o.status ?? 'inbox';
@@ -68,6 +100,9 @@ function task(v: unknown, p: string, version: number, warnings: Set<string>): GT
   const result = defaults(o, { status, priority: 'none', actionList: status === 'waiting' ? 'waiting' : status === 'someday' ? 'someday-maybe' : 'next-action', tags, contexts,
     plannedPrecision: o.plannedStart ? 'minute' : 'none', planRangeIntent: 'progress', executionSlots, deadlinePrecision: 'none', recurrence: '', note: '', createdAt, updatedAt: createdAt, order: 0, completedInstances, skippedInstances }) as unknown as GTDTask;
   result.executionSlots = executionSlots;
+  if (result.taskSchedule && !supportsDailyRecurrence(result)) fail(p, 'scoped schedule metadata requires a supported DAILY rule');
+  if (result.taskSchedule && [...result.taskSchedule.exceptions.map(row => ({ day: row.day, plan: row.plan })), ...result.taskSchedule.revisions.map(row => ({ day: row.fromDay, plan: row.plan }))].some(row => row.plan.plannedStart && dateDay(row.plan.plannedStart) !== row.day)) warnings.add('A scoped schedule instant falls on a different local day from its occurrence/effective date, possibly after a timezone change. Original timestamps and occurrence dates are preserved; review them explicitly.');
+  for (const warning of arrangementWarnings(result)) warnings.add(warning);
   if (result.recurrence.trim() && !supportsDailyRecurrence(result)) warnings.add('Some recurrence rules are preserved but not expanded: this prototype only projects FREQ=DAILY with optional INTERVAL=1.');
   if ((result.plannedPrecision === 'date' && result.plannedStart && isISO(result.plannedStart)) || (result.deadlinePrecision === 'date' && result.deadline && isISO(result.deadline))) warnings.add('Legacy date-only values are ISO instants without a source timezone. Their local day follows this device’s timezone; review dates after a timezone change. Original strings are preserved.');
   return result;

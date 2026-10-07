@@ -25,7 +25,7 @@ test('snapshot clips slots at midnight, preserves point plans with zero duration
   assert.equal(snapshot.planBlocks[0].start, iso(0)); assert.equal(snapshot.planBlocks[0].plannedDuration, 3600);
   const point = snapshot.planBlocks.find(b => b.taskID === tid(db, 1))!;
   assert.equal(point.isPoint, true); assert.equal(point.plannedDuration, 0); assert.equal(point.end, iso(10, 12, 30));
-  assert.equal(snapshot.plannedDuration, 7200); assert.equal(snapshot.waitingCount, 0);
+  assert.equal(snapshot.plannedDuration, 7200); assert.equal(snapshot.waitingCount, 2); assert.equal(snapshot.rescheduleTasks.length, 2);
   assert.equal(todayScheduleSnapshot(db, wid(db), '2026-04-13', now).planBlocks.length, 0); assert.equal(encoded(db), before);
 }));
 
